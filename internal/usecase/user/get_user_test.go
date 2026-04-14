@@ -10,6 +10,13 @@ import (
 	apperrors "github.com/fuju/backend/pkg/errors"
 )
 
+const (
+	msgExpectedErrorGotNil = "expected error, got nil"
+	msgExpectedNilUser     = "expected nil user, got %v"
+	msgExpectedAppError    = "expected AppError, got %T"
+	msgExpectedErrorCode   = "expected error code %s, got %s"
+)
+
 // MockUserRepository is a mock implementation of UserRepository
 type MockUserRepository struct {
 	users map[int64]*domain.User
@@ -17,7 +24,7 @@ type MockUserRepository struct {
 }
 
 // Create creates a new user in mock
-func (m *MockUserRepository) Create(ctx context.Context, user *domain.User) (*domain.User, error) {
+func (m *MockUserRepository) Create(_ context.Context, user *domain.User) (*domain.User, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -26,7 +33,7 @@ func (m *MockUserRepository) Create(ctx context.Context, user *domain.User) (*do
 }
 
 // GetByID retrieves a user by ID from mock
-func (m *MockUserRepository) GetByID(ctx context.Context, id int64) (*domain.User, error) {
+func (m *MockUserRepository) GetByID(_ context.Context, id int64) (*domain.User, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -38,7 +45,7 @@ func (m *MockUserRepository) GetByID(ctx context.Context, id int64) (*domain.Use
 }
 
 // GetByUsername retrieves a user by username from mock
-func (m *MockUserRepository) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
+func (m *MockUserRepository) GetByUsername(_ context.Context, username string) (*domain.User, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -51,7 +58,7 @@ func (m *MockUserRepository) GetByUsername(ctx context.Context, username string)
 }
 
 // GetByEmail retrieves a user by email from mock
-func (m *MockUserRepository) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
+func (m *MockUserRepository) GetByEmail(_ context.Context, email string) (*domain.User, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -64,7 +71,7 @@ func (m *MockUserRepository) GetByEmail(ctx context.Context, email string) (*dom
 }
 
 // GetByOAuthID retrieves a user by OAuth ID from mock
-func (m *MockUserRepository) GetByOAuthID(ctx context.Context, provider, oauthID string) (*domain.User, error) {
+func (m *MockUserRepository) GetByOAuthID(_ context.Context, provider, oauthID string) (*domain.User, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -77,7 +84,7 @@ func (m *MockUserRepository) GetByOAuthID(ctx context.Context, provider, oauthID
 }
 
 // Update updates a user in mock
-func (m *MockUserRepository) Update(ctx context.Context, id int64, req *domain.UpdateUserRequest) (*domain.User, error) {
+func (m *MockUserRepository) Update(_ context.Context, id int64, req *domain.UpdateUserRequest) (*domain.User, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -99,7 +106,7 @@ func (m *MockUserRepository) Update(ctx context.Context, id int64, req *domain.U
 }
 
 // Delete soft-deletes a user in mock
-func (m *MockUserRepository) Delete(ctx context.Context, id int64) error {
+func (m *MockUserRepository) Delete(_ context.Context, id int64) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -113,7 +120,7 @@ func (m *MockUserRepository) Delete(ctx context.Context, id int64) error {
 }
 
 // List lists users from mock
-func (m *MockUserRepository) List(ctx context.Context, limit, offset int) ([]*domain.User, int64, error) {
+func (m *MockUserRepository) List(_ context.Context, _, _ int) ([]*domain.User, int64, error) {
 	if m.err != nil {
 		return nil, 0, m.err
 	}
@@ -125,7 +132,7 @@ func (m *MockUserRepository) List(ctx context.Context, limit, offset int) ([]*do
 }
 
 // TestGetUserUsecase_Success tests successful GetUser execution
-func TestGetUserUsecase_Success(t *testing.T) {
+func TestGetUserUsecaseSuccess(t *testing.T) {
 	// Arrange
 	mockRepo := &MockUserRepository{
 		users: map[int64]*domain.User{
@@ -167,7 +174,7 @@ func TestGetUserUsecase_Success(t *testing.T) {
 }
 
 // TestGetUserUsecase_NotFound tests GetUser when user doesn't exist
-func TestGetUserUsecase_NotFound(t *testing.T) {
+func TestGetUserUsecaseNotFound(t *testing.T) {
 	// Arrange
 	mockRepo := &MockUserRepository{
 		users: map[int64]*domain.User{},
@@ -181,26 +188,26 @@ func TestGetUserUsecase_NotFound(t *testing.T) {
 
 	// Assert
 	if err == nil {
-		t.Fatal("expected error, got nil")
+		t.Fatal(msgExpectedErrorGotNil)
 	}
 
 	if user != nil {
-		t.Errorf("expected nil user, got %v", user)
+		t.Errorf(msgExpectedNilUser, user)
 	}
 
 	// Check error type
 	appErr, ok := apperrors.IsAppError(err)
 	if !ok {
-		t.Fatalf("expected AppError, got %T", err)
+		t.Fatalf(msgExpectedAppError, err)
 	}
 
 	if appErr.Code != apperrors.ErrNotFound {
-		t.Errorf("expected error code %s, got %s", apperrors.ErrNotFound, appErr.Code)
+		t.Errorf(msgExpectedErrorCode, apperrors.ErrNotFound, appErr.Code)
 	}
 }
 
 // TestGetUserUsecase_InvalidID tests GetUser with invalid ID
-func TestGetUserUsecase_InvalidID(t *testing.T) {
+func TestGetUserUsecaseInvalidID(t *testing.T) {
 	tests := []struct {
 		name   string
 		userID int64
@@ -221,27 +228,27 @@ func TestGetUserUsecase_InvalidID(t *testing.T) {
 			user, err := usecase.Execute(ctx, tt.userID)
 
 			if err == nil {
-				t.Fatal("expected error, got nil")
+				t.Fatal(msgExpectedErrorGotNil)
 			}
 
 			if user != nil {
-				t.Errorf("expected nil user, got %v", user)
+				t.Errorf(msgExpectedNilUser, user)
 			}
 
 			appErr, ok := apperrors.IsAppError(err)
 			if !ok {
-				t.Fatalf("expected AppError, got %T", err)
+				t.Fatalf(msgExpectedAppError, err)
 			}
 
 			if appErr.Code != apperrors.ErrInvalidRequest {
-				t.Errorf("expected error code %s, got %s", apperrors.ErrInvalidRequest, appErr.Code)
+				t.Errorf(msgExpectedErrorCode, apperrors.ErrInvalidRequest, appErr.Code)
 			}
 		})
 	}
 }
 
 // TestGetUserUsecase_RepositoryError tests GetUser when repository returns error
-func TestGetUserUsecase_RepositoryError(t *testing.T) {
+func TestGetUserUsecaseRepositoryError(t *testing.T) {
 	// Arrange
 	mockRepo := &MockUserRepository{
 		users: map[int64]*domain.User{},
@@ -256,20 +263,20 @@ func TestGetUserUsecase_RepositoryError(t *testing.T) {
 
 	// Assert
 	if err == nil {
-		t.Fatal("expected error, got nil")
+		t.Fatal(msgExpectedErrorGotNil)
 	}
 
 	if user != nil {
-		t.Errorf("expected nil user, got %v", user)
+		t.Errorf(msgExpectedNilUser, user)
 	}
 
 	// Check error type
 	appErr, ok := apperrors.IsAppError(err)
 	if !ok {
-		t.Fatalf("expected AppError, got %T", err)
+		t.Fatalf(msgExpectedAppError, err)
 	}
 
 	if appErr.Code != apperrors.ErrDatabaseError {
-		t.Errorf("expected error code %s, got %s", apperrors.ErrDatabaseError, appErr.Code)
+		t.Errorf(msgExpectedErrorCode, apperrors.ErrDatabaseError, appErr.Code)
 	}
 }
