@@ -1,0 +1,33 @@
+version: "1.54"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - govet
+    - errcheck
+    - staticcheck
+    - gosimple
+    - ineffassign
+    - unused
+    - goimports
+    - gocyclo
+    - dupl
+    - goconst
+    - unconvert
+    - misspell
+    - gocritic
+    - stylecheck
+    - unparam
+    - nakedret
+    - revive
+  disable:
+    - gosec
+    - golint
+    - maligned
+    - prealloc
+
+issues:
+  max-same-issues: 10
