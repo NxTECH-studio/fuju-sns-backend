@@ -29,7 +29,7 @@ jobs:
             - name: Set up Go
               uses: actions/setup-go@v4
               with:
-                  go-version: "1.21"
+                  go-version: "1.25.7"
                   cache: true
 
             - name: Get PR diff
@@ -40,7 +40,8 @@ jobs:
 
                   # Extract file changes summary
                   echo "files=$(git diff --name-only origin/main..HEAD 2>/dev/null | tr '\n' ' ' || echo 'N/A')" >> $GITHUB_OUTPUT
-                  echo "stats=$(git diff --stat origin/main..HEAD 2>/dev/null || echo 'N/A')" >> $GITHUB_OUTPUT
+                  STATS=$(git diff --stat origin/main..HEAD 2>/dev/null | tr '\n' '; ' || echo 'N/A')
+                  echo "stats=${STATS}" >> $GITHUB_OUTPUT
 
                   # Count changes with error handling
                   ADDITIONS=$(git diff --numstat origin/main..HEAD 2>/dev/null | awk '{sum+=$1} END {print sum}' || echo 0)
