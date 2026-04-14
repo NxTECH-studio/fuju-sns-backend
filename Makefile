@@ -1,4 +1,4 @@
-.PHONY: setup build test lint fmt clean run help
+.PHONY: setup build test lint fmt fmt-fix clean run help
 
 # Variables
 BINARY_NAME=fuju-backend
@@ -61,6 +61,22 @@ fmt:
 	@echo "Formatting code..."
 	$(GO) fmt ./...
 	@echo "Code formatted!"
+
+# Format and fix issues (goimports + gofmt)
+fmt-fix:
+	@echo "Running auto-fixers..."
+	@echo "1. Running goimports for package comments..."
+	@command -v goimports >/dev/null 2>&1 || ($(GO) install golang.org/x/tools/cmd/goimports@latest)
+	$$($(GO) env GOPATH)/bin/goimports -w ./
+	@echo "2. Running gofmt for formatting..."
+	gofmt -s -w ./
+	@echo ""
+	@echo "Auto-fix complete!"
+	@echo "NOTE: Manual fixes still needed for:"
+	@echo "  - Add package comments: // Package xxx ..."
+	@echo "  - Add exported function comments"
+	@echo "  - Rename unused parameters to _"
+	@echo "  - Add error checks for fmt.Fprintf/Fprintln"
 
 # Clean build artifacts
 clean:

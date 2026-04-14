@@ -1,3 +1,4 @@
+// Package errors defines custom application error types and constructors.
 package errors
 
 import (
@@ -72,38 +73,48 @@ const (
 )
 
 // Error constructors
+
+// InvalidRequest creates an INVALID_REQUEST error.
 func InvalidRequest(message string, err error) *AppError {
 	return New(ErrInvalidRequest, message, http.StatusBadRequest, err)
 }
 
+// Unauthorized creates an UNAUTHORIZED error.
 func Unauthorized(message string) *AppError {
 	return NewWithStatus(ErrUnauthorized, message, http.StatusUnauthorized)
 }
 
+// Forbidden creates a FORBIDDEN error.
 func Forbidden(message string) *AppError {
 	return NewWithStatus(ErrForbidden, message, http.StatusForbidden)
 }
 
+// NotFound creates a NOT_FOUND error.
 func NotFound(message string) *AppError {
 	return NewWithStatus(ErrNotFound, message, http.StatusNotFound)
 }
 
+// Conflict creates a CONFLICT error.
 func Conflict(message string) *AppError {
 	return NewWithStatus(ErrConflict, message, http.StatusConflict)
 }
 
+// ValidationFailed creates a VALIDATION_FAILED error.
 func ValidationFailed(message string) *AppError {
 	return NewWithStatus(ErrValidationFailed, message, http.StatusBadRequest)
 }
 
+// InternalServer creates an INTERNAL_ERROR error.
 func InternalServer(message string, err error) *AppError {
 	return New(ErrInternal, message, http.StatusInternalServerError, err)
 }
 
+// DatabaseError creates a DATABASE_ERROR error.
 func DatabaseError(message string, err error) *AppError {
 	return New(ErrDatabaseError, message, http.StatusInternalServerError, err)
 }
 
+// ExternalServiceError creates an EXTERNAL_SERVICE_ERROR error.
 func ExternalServiceError(message string, err error) *AppError {
 	return New(ErrExternalService, message, http.StatusBadGateway, err)
 }
@@ -116,7 +127,8 @@ func ToHTTPStatus(err error) int {
 	return http.StatusInternalServerError
 }
 
-// ToErrorResponse converts an error to a standardized error response
+// ToErrorResponse converts an error to a standardized error response.
+// ErrorResponse represents a standardized error response format.
 type ErrorResponse struct {
 	Code      string      `json:"code"`
 	Message   string      `json:"message"`

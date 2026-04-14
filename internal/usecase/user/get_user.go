@@ -1,3 +1,4 @@
+// Package user provides user-related use cases.
 package user
 
 import (
