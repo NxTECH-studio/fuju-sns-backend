@@ -20,9 +20,6 @@ vendor/
 go.work
 
 # IDE
-.vscode/
-!.vscode/settings.json
-!.vscode/extensions.json
 .idea/
 *.swp
 *.swo
@@ -85,3 +82,5 @@ $RECYCLE.BIN/
 
 # Debugger
 .delve/
+
+server
