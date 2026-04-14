@@ -22,8 +22,6 @@ linters:
     - revive
   disable:
     - gosec
-    - golint
-    - maligned
     - prealloc
 
 formatters:
