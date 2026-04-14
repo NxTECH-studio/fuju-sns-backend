@@ -10,7 +10,12 @@ import (
 	apperrors "github.com/fuju/backend/pkg/errors"
 )
 
-const msgExpectedErrorGotNil = "expected error, got nil"
+const (
+	msgExpectedErrorGotNil = "expected error, got nil"
+	msgExpectedNilUser     = "expected nil user, got %v"
+	msgExpectedAppError    = "expected AppError, got %T"
+	msgExpectedErrorCode   = "expected error code %s, got %s"
+)
 
 // MockUserRepository is a mock implementation of UserRepository
 type MockUserRepository struct {
@@ -187,17 +192,17 @@ func TestGetUserUsecaseNotFound(t *testing.T) {
 	}
 
 	if user != nil {
-		t.Errorf("expected nil user, got %v", user)
+		t.Errorf(msgExpectedNilUser, user)
 	}
 
 	// Check error type
 	appErr, ok := apperrors.IsAppError(err)
 	if !ok {
-		t.Fatalf("expected AppError, got %T", err)
+		t.Fatalf(msgExpectedAppError, err)
 	}
 
 	if appErr.Code != apperrors.ErrNotFound {
-		t.Errorf("expected error code %s, got %s", apperrors.ErrNotFound, appErr.Code)
+		t.Errorf(msgExpectedErrorCode, apperrors.ErrNotFound, appErr.Code)
 	}
 }
 
@@ -227,16 +232,16 @@ func TestGetUserUsecaseInvalidID(t *testing.T) {
 			}
 
 			if user != nil {
-				t.Errorf("expected nil user, got %v", user)
+				t.Errorf(msgExpectedNilUser, user)
 			}
 
 			appErr, ok := apperrors.IsAppError(err)
 			if !ok {
-				t.Fatalf("expected AppError, got %T", err)
+				t.Fatalf(msgExpectedAppError, err)
 			}
 
 			if appErr.Code != apperrors.ErrInvalidRequest {
-				t.Errorf("expected error code %s, got %s", apperrors.ErrInvalidRequest, appErr.Code)
+				t.Errorf(msgExpectedErrorCode, apperrors.ErrInvalidRequest, appErr.Code)
 			}
 		})
 	}
@@ -262,16 +267,16 @@ func TestGetUserUsecaseRepositoryError(t *testing.T) {
 	}
 
 	if user != nil {
-		t.Errorf("expected nil user, got %v", user)
+		t.Errorf(msgExpectedNilUser, user)
 	}
 
 	// Check error type
 	appErr, ok := apperrors.IsAppError(err)
 	if !ok {
-		t.Fatalf("expected AppError, got %T", err)
+		t.Fatalf(msgExpectedAppError, err)
 	}
 
 	if appErr.Code != apperrors.ErrDatabaseError {
-		t.Errorf("expected error code %s, got %s", apperrors.ErrDatabaseError, appErr.Code)
+		t.Errorf(msgExpectedErrorCode, apperrors.ErrDatabaseError, appErr.Code)
 	}
 }
