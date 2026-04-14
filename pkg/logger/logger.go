@@ -1,3 +1,4 @@
+// Package logger provides logging functionality for the application.
 package logger
 
 import (
@@ -12,6 +13,7 @@ import (
 // Level represents log level
 type Level int
 
+// Level represents the log level.
 const (
 	DebugLevel Level = iota
 	InfoLevel
@@ -155,7 +157,7 @@ func (l *Logger) writeEntry(entry *Entry) {
 		return
 	}
 
-	fmt.Fprintln(l.writer, string(data))
+	_, _ = fmt.Fprintln(l.writer, string(data))
 }
 
 // fieldsToMap converts variadic fields to a map

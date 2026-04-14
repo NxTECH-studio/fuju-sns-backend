@@ -1,3 +1,4 @@
+// Package domain contains domain models and errors.
 package domain
 
 import (
