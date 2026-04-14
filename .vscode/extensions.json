@@ -1,0 +1,26 @@
+{
+  "recommendations": [
+    "golang.go",
+    "golang.tools",
+    "eamodio.gitlens",
+    "ms-vscode.makefile-tools",
+    "DavidAnson.vscode-markdownlint",
+    "esbenp.prettier-vscode",
+    "GitLab.gitlab-workflow",
+    "GitHub.copilot",
+    "GitHub.copilot-chat",
+    "GitHub.github-vscode-theme",
+    "Gruntfuggly.todo-tree",
+    "ms-azuretools.vscode-docker",
+    "ms-vscode-remote.remote-containers",
+    "ms-vscode-remote.remote-ssh",
+    "ms-vscode.remote-explorer",
+    "ms-vscode.vscode-typescript-tslint-plugin",
+    "redhat.vscode-yaml",
+    "bierner.markdown-preview-github-styles",
+    "ms-vscode.makefile-tools",
+    "usernamehw.errorlens",
+    "zxh404.vscode-proto3",
+    "ms-vscode.makefile-tools"
+  ]
+}
