@@ -1,0 +1,35 @@
+# Claude AI Configuration for FUJU Backend
+
+## Language Preference
+language: "ja"  # 日本語
+
+## Context
+project_name: "FUJU Backend"
+project_type: "Go REST API (SNS)"
+architecture: "Clean Architecture"
+
+## Guidelines for AI
+- 日本語で応答してください
+- コード変更時は英語のコメント・変数名を保持してください
+- ドキュメント：英語と日本語の混在は避け、コンテキストに合わせてください
+- エラーメッセージ・ログ：英語で統一（国際対応）
+- コミットメッセージ：英語の型式（feat/fix/docs等）を使用
+- テストケース：英語の関数名で統一
+
+## Output Format
+- コード：言語固有の規則を保持
+- ドキュメント：日本語で簡潔に
+- エラーハンドリング：完全に実装し、エラーケースを記載
+- テスト：サンプル実装を含める
+
+## Key Principles
+1. Clean Architecture 厳密遵守
+2. Go 標準ライブラリ優先
+3. 80%+ テストカバレッジ
+4. エラーハンドリング完全実装
+5. セキュリティベストプラクティス
+
+## Reference Files
+- .agent.md: AI 開発ガイドライン（読み込み推奨）
+- docs/architecture.md: アーキテクチャ設計
+- docs/swagger.yaml: API 仕様
