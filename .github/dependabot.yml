@@ -1,0 +1,45 @@
+version: 2
+updates:
+  # Go 依存パッケージ
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "03:00"
+    open-pull-requests-limit: 10
+    labels:
+      - "依存パッケージ"
+      - "go"
+    commit-message:
+      prefix: "chore(deps):"
+    rebase-strategy: "auto"
+
+  # GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "03:30"
+    open-pull-requests-limit: 5
+    labels:
+      - "依存パッケージ"
+      - "github-actions"
+    commit-message:
+      prefix: "ci:"
+    rebase-strategy: "auto"
+
+  # Docker（コンテナを使用する場合）
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+    open-pull-requests-limit: 5
+    labels:
+      - "依存パッケージ"
+      - "docker"
+    commit-message:
+      prefix: "ci(docker):"

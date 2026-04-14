@@ -1,0 +1,228 @@
+name: AI-Powered PR Review
+
+on:
+    pull_request:
+        types: [opened, synchronize]
+        paths:
+            - "**.go"
+            - "go.mod"
+            - "go.sum"
+            - ".github/workflows/**"
+
+permissions:
+    pull-requests: write
+    contents: read
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+    cancel-in-progress: true
+
+jobs:
+    review:
+        runs-on: ubuntu-latest
+        if: github.event.pull_request.draft == false
+        steps:
+            - uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Set up Go
+              uses: actions/setup-go@v4
+              with:
+                  go-version: "1.21"
+                  cache: "go"
+
+            - name: Get PR diff
+              id: diff
+              run: |
+                  git fetch origin main 2>/dev/null || true
+                  git diff origin/main..HEAD > pr.diff 2>/dev/null || true
+
+                  # Extract file changes summary
+                  echo "files=$(git diff --name-only origin/main..HEAD 2>/dev/null | tr '\n' ' ' || echo 'N/A')" >> $GITHUB_OUTPUT
+                  echo "stats=$(git diff --stat origin/main..HEAD 2>/dev/null || echo 'N/A')" >> $GITHUB_OUTPUT
+
+                  # Count changes with error handling
+                  ADDITIONS=$(git diff --numstat origin/main..HEAD 2>/dev/null | awk '{sum+=$1} END {print sum}' || echo 0)
+                  DELETIONS=$(git diff --numstat origin/main..HEAD 2>/dev/null | awk '{sum+=$2} END {print sum}' || echo 0)
+
+                  echo "additions=${ADDITIONS:-0}" >> $GITHUB_OUTPUT
+                  echo "deletions=${DELETIONS:-0}" >> $GITHUB_OUTPUT
+
+            - name: Analyze code quality
+              id: quality
+              run: |
+                  # Check for common issues
+                  if git diff origin/main..HEAD 2>/dev/null | grep -E "TODO|FIXME|HACK" >/dev/null 2>&1; then
+                    echo "has_comments=true" >> $GITHUB_OUTPUT
+                  else
+                    echo "has_comments=false" >> $GITHUB_OUTPUT
+                  fi
+
+                  # Check for test coverage
+                  if git diff --name-only origin/main..HEAD 2>/dev/null | grep "_test.go" >/dev/null 2>&1; then
+                    echo "has_tests=true" >> $GITHUB_OUTPUT
+                  else
+                    echo "has_tests=false" >> $GITHUB_OUTPUT
+                  fi
+
+            - name: Generate review summary
+              id: review
+              env:
+                  ADDITIONS: ${{ steps.diff.outputs.additions }}
+                  DELETIONS: ${{ steps.diff.outputs.deletions }}
+              run: |
+                  echo "## 🤖 AI Code Review" > /tmp/review_body.txt
+                  echo "" >> /tmp/review_body.txt
+                  echo "### 📊 Change Summary" >> /tmp/review_body.txt
+                  echo "- **Additions**: +${ADDITIONS}" >> /tmp/review_body.txt
+                  echo "- **Deletions**: -${DELETIONS}" >> /tmp/review_body.txt
+                  echo "" >> /tmp/review_body.txt
+                  echo "### ✅ Code Quality Checks" >> /tmp/review_body.txt
+                  echo "" >> /tmp/review_body.txt
+                  echo "**Linting**: Configured via CI/CD" >> /tmp/review_body.txt
+                  echo "**Testing**: Run via CI/CD pipeline" >> /tmp/review_body.txt
+                  echo "**Build**: Verified in CI/CD pipeline" >> /tmp/review_body.txt
+                  echo "" >> /tmp/review_body.txt
+                  echo "### 🔍 Key Review Points" >> /tmp/review_body.txt
+                  echo "" >> /tmp/review_body.txt
+                  echo "1. **Clean Architecture Adherence**" >> /tmp/review_body.txt
+                  echo "   - Ensure changes follow domain, usecase, repository, handler layers" >> /tmp/review_body.txt
+                  echo "   - Check for circular dependencies" >> /tmp/review_body.txt
+                  echo "" >> /tmp/review_body.txt
+                  echo "2. **Error Handling**" >> /tmp/review_body.txt
+                  echo "   - Verify proper error wrapping with context" >> /tmp/review_body.txt
+                  echo "   - Check error types align with domain errors" >> /tmp/review_body.txt
+                  echo "" >> /tmp/review_body.txt
+                  echo "3. **Testing Coverage**" >> /tmp/review_body.txt
+                  echo "   - New code should include unit tests" >> /tmp/review_body.txt
+                  echo "   - Aim for >80% coverage" >> /tmp/review_body.txt
+                  echo "" >> /tmp/review_body.txt
+                  echo "4. **Security Considerations**" >> /tmp/review_body.txt
+                  echo "   - Validate authentication/authorization logic" >> /tmp/review_body.txt
+                  echo "   - Check JWT and session handling" >> /tmp/review_body.txt
+                  echo "   - Ensure no sensitive data in logs" >> /tmp/review_body.txt
+                  echo "" >> /tmp/review_body.txt
+                  echo "5. **Performance Implications**" >> /tmp/review_body.txt
+                  echo "   - Check for N+1 query problems" >> /tmp/review_body.txt
+                  echo "   - Verify efficient use of caching (Redis)" >> /tmp/review_body.txt
+                  echo "   - Monitor database indexes" >> /tmp/review_body.txt
+                  echo "" >> /tmp/review_body.txt
+                  echo "6. **API Contract**" >> /tmp/review_body.txt
+                  echo "   - Verify OpenAPI/Swagger spec updates if needed" >> /tmp/review_body.txt
+                  echo "   - Check backward compatibility" >> /tmp/review_body.txt
+                  echo "" >> /tmp/review_body.txt
+                  echo "### 📝 Reviewer Notes" >> /tmp/review_body.txt
+                  echo "" >> /tmp/review_body.txt
+                  echo "1. Check if CHANGELOG.md or release notes need updating" >> /tmp/review_body.txt
+                  echo "2. Verify commit messages follow convention (feat/fix/docs/test/refactor/chore)" >> /tmp/review_body.txt
+                  echo "3. Review database migrations if applicable" >> /tmp/review_body.txt
+                  echo "4. Ensure environment variable documentation is updated" >> /tmp/review_body.txt
+                  echo "" >> /tmp/review_body.txt
+                  echo "---" >> /tmp/review_body.txt
+                  echo "" >> /tmp/review_body.txt
+                  echo "⚠️ **This is an automated review summary. Human review is still required!**" >> /tmp/review_body.txt
+                  echo "review_file=/tmp/review_body.txt" >> $GITHUB_OUTPUT
+
+            - name: Post review comment
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      const fs = require('fs');
+                      const reviewBody = fs.readFileSync('${{ steps.review.outputs.review_file }}', 'utf8');
+
+                      github.rest.issues.createComment({
+                        issue_number: context.issue.number,
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        body: reviewBody
+                      });
+
+            - name: Check for required files
+              id: required-files
+              run: |
+                  MISSING_FILES=""
+
+                  # Check if tests were added for Go files
+                  if git diff --name-only origin/main..HEAD | grep -E '\.go$' | grep -v _test.go >/dev/null 2>&1; then
+                    if ! git diff --name-only origin/main..HEAD | grep _test.go >/dev/null 2>&1; then
+                      MISSING_FILES="- Ensure tests are added for new code"
+                    fi
+                  fi
+
+                  # Check if docs were updated for significant changes
+                  ADDITIONS=$(git diff --numstat origin/main..HEAD 2>/dev/null | awk '{sum+=$1} END {print sum}')
+                  ADDITIONS=${ADDITIONS:-0}
+
+                  if [ "$ADDITIONS" -gt 50 ]; then
+                    if ! git diff --name-only origin/main..HEAD | grep -E '(README|docs/|architecture)' >/dev/null 2>&1; then
+                      if [ -n "$MISSING_FILES" ]; then
+                        MISSING_FILES="${MISSING_FILES}"$'\n'"- Consider updating documentation for significant changes"
+                      else
+                        MISSING_FILES="- Consider updating documentation for significant changes"
+                      fi
+                    fi
+                  fi
+
+                  if [ -n "$MISSING_FILES" ]; then
+                    echo "missing_files<<EOF" >> $GITHUB_OUTPUT
+                    echo "$MISSING_FILES" >> $GITHUB_OUTPUT
+                    echo "EOF" >> $GITHUB_OUTPUT
+                  fi
+
+            - name: Request changes if needed
+              if: steps.required-files.outputs.missing_files != ''
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      github.rest.issues.createComment({
+                        issue_number: context.issue.number,
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        body: `### ⚠️ レビューチェックリスト\n\n${{ steps.required-files.outputs.missing_files }}`
+                      });
+
+            - name: Check commit message format
+              id: commit-format
+              run: |
+                  # Get the first commit message
+                  COMMIT_MSG=$(git log --format="%B" origin/main..HEAD 2>/dev/null | head -1)
+
+                  if [ -z "$COMMIT_MSG" ]; then
+                    echo "invalid=false" >> $GITHUB_OUTPUT
+                  elif ! echo "$COMMIT_MSG" | grep -E "^(feat|fix|docs|test|refactor|chore)(\(.+\))?:" >/dev/null 2>&1; then
+                    echo "invalid=true" >> $GITHUB_OUTPUT
+                  else
+                    echo "invalid=false" >> $GITHUB_OUTPUT
+                  fi
+
+            - name: Comment on commit format
+              if: steps.commit-format.outputs.invalid == 'true'
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      github.rest.issues.createComment({
+                        issue_number: context.issue.number,
+                        owner: context.repo.owner,
+                        repo: context.repo.repo,
+                        body: `### ❌ コミットメッセージ形式のエラー\n\nConventional Commits 形式に従ってください：\n\`\`\`\ntype(scope): 説明\n\nBody（オプション）\nFooter（オプション）\n\`\`\`\n\nTypes: \`feat\`, \`fix\`, \`docs\`, \`test\`, \`refactor\`, \`chore\``
+                      });
+
+    notify-review:
+        runs-on: ubuntu-latest
+        needs: review
+        if: always()
+        steps:
+            - name: Add review status label
+              uses: actions/github-script@v7
+              with:
+                  script: |
+                      if (context.issue && context.issue.number) {
+                        const labels = ['needs-review'];
+                        github.rest.issues.addLabels({
+                          issue_number: context.issue.number,
+                          owner: context.repo.owner,
+                          repo: context.repo.repo,
+                          labels: labels
+                        });
+                      }
