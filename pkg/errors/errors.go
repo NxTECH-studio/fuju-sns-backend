@@ -127,7 +127,6 @@ func ToHTTPStatus(err error) int {
 	return http.StatusInternalServerError
 }
 
-// ToErrorResponse converts an error to a standardized error response.
 // ErrorResponse represents a standardized error response format.
 type ErrorResponse struct {
 	Code      string      `json:"code"`

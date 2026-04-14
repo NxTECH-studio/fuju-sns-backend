@@ -113,7 +113,7 @@ func (m *MockUserRepository) Delete(_ context.Context, id int64) error {
 }
 
 // List lists users from mock
-func (m *MockUserRepository) List(_ context.Context, limit, offset int) ([]*domain.User, int64, error) {
+func (m *MockUserRepository) List(_ context.Context, _, offset int) ([]*domain.User, int64, error) {
 	if m.err != nil {
 		return nil, 0, m.err
 	}
