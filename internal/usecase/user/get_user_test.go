@@ -10,6 +10,13 @@ import (
 	apperrors "github.com/fuju/backend/pkg/errors"
 )
 
+const (
+	msgExpectedErrorGotNil = "expected error, got nil"
+	msgExpectedNilUser     = "expected nil user, got %v"
+	msgExpectedAppError    = "expected AppError, got %T"
+	msgExpectedErrorCode   = "expected error code %s, got %s"
+)
+
 // MockUserRepository is a mock implementation of UserRepository
 type MockUserRepository struct {
 	users map[int64]*domain.User
@@ -113,7 +120,7 @@ func (m *MockUserRepository) Delete(_ context.Context, id int64) error {
 }
 
 // List lists users from mock
-func (m *MockUserRepository) List(_ context.Context, limit, offset int) ([]*domain.User, int64, error) {
+func (m *MockUserRepository) List(_ context.Context, _, _ int) ([]*domain.User, int64, error) {
 	if m.err != nil {
 		return nil, 0, m.err
 	}
@@ -125,7 +132,7 @@ func (m *MockUserRepository) List(_ context.Context, limit, offset int) ([]*doma
 }
 
 // TestGetUserUsecase_Success tests successful GetUser execution
-func TestGetUserUsecase_Success(t *testing.T) {
+func TestGetUserUsecaseSuccess(t *testing.T) {
 	// Arrange
 	mockRepo := &MockUserRepository{
 		users: map[int64]*domain.User{
@@ -167,7 +174,7 @@ func TestGetUserUsecase_Success(t *testing.T) {
 }
 
 // TestGetUserUsecase_NotFound tests GetUser when user doesn't exist
-func TestGetUserUsecase_NotFound(t *testing.T) {
+func TestGetUserUsecaseNotFound(t *testing.T) {
 	// Arrange
 	mockRepo := &MockUserRepository{
 		users: map[int64]*domain.User{},
@@ -181,26 +188,26 @@ func TestGetUserUsecase_NotFound(t *testing.T) {
 
 	// Assert
 	if err == nil {
-		t.Fatal("expected error, got nil")
+		t.Fatal(msgExpectedErrorGotNil)
 	}
 
 	if user != nil {
-		t.Errorf("expected nil user, got %v", user)
+		t.Errorf(msgExpectedNilUser, user)
 	}
 
 	// Check error type
 	appErr, ok := apperrors.IsAppError(err)
 	if !ok {
-		t.Fatalf("expected AppError, got %T", err)
+		t.Fatalf(msgExpectedAppError, err)
 	}
 
 	if appErr.Code != apperrors.ErrNotFound {
-		t.Errorf("expected error code %s, got %s", apperrors.ErrNotFound, appErr.Code)
+		t.Errorf(msgExpectedErrorCode, apperrors.ErrNotFound, appErr.Code)
 	}
 }
 
 // TestGetUserUsecase_InvalidID tests GetUser with invalid ID
-func TestGetUserUsecase_InvalidID(t *testing.T) {
+func TestGetUserUsecaseInvalidID(t *testing.T) {
 	tests := []struct {
 		name   string
 		userID int64
@@ -221,27 +228,27 @@ func TestGetUserUsecase_InvalidID(t *testing.T) {
 			user, err := usecase.Execute(ctx, tt.userID)
 
 			if err == nil {
-				t.Fatal("expected error, got nil")
+				t.Fatal(msgExpectedErrorGotNil)
 			}
 
 			if user != nil {
-				t.Errorf("expected nil user, got %v", user)
+				t.Errorf(msgExpectedNilUser, user)
 			}
 
 			appErr, ok := apperrors.IsAppError(err)
 			if !ok {
-				t.Fatalf("expected AppError, got %T", err)
+				t.Fatalf(msgExpectedAppError, err)
 			}
 
 			if appErr.Code != apperrors.ErrInvalidRequest {
-				t.Errorf("expected error code %s, got %s", apperrors.ErrInvalidRequest, appErr.Code)
+				t.Errorf(msgExpectedErrorCode, apperrors.ErrInvalidRequest, appErr.Code)
 			}
 		})
 	}
 }
 
 // TestGetUserUsecase_RepositoryError tests GetUser when repository returns error
-func TestGetUserUsecase_RepositoryError(t *testing.T) {
+func TestGetUserUsecaseRepositoryError(t *testing.T) {
 	// Arrange
 	mockRepo := &MockUserRepository{
 		users: map[int64]*domain.User{},
@@ -256,20 +263,20 @@ func TestGetUserUsecase_RepositoryError(t *testing.T) {
 
 	// Assert
 	if err == nil {
-		t.Fatal("expected error, got nil")
+		t.Fatal(msgExpectedErrorGotNil)
 	}
 
 	if user != nil {
-		t.Errorf("expected nil user, got %v", user)
+		t.Errorf(msgExpectedNilUser, user)
 	}
 
 	// Check error type
 	appErr, ok := apperrors.IsAppError(err)
 	if !ok {
-		t.Fatalf("expected AppError, got %T", err)
+		t.Fatalf(msgExpectedAppError, err)
 	}
 
 	if appErr.Code != apperrors.ErrDatabaseError {
-		t.Errorf("expected error code %s, got %s", apperrors.ErrDatabaseError, appErr.Code)
+		t.Errorf(msgExpectedErrorCode, apperrors.ErrDatabaseError, appErr.Code)
 	}
 }

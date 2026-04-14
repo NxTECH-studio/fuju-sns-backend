@@ -8,6 +8,13 @@ project_name: "FUJU Backend"
 project_type: "Go REST API (SNS)"
 architecture: "Clean Architecture"
 
+## Git & GitHub Workflow
+**IMPORTANT**: Always use GitHub CLI (`gh` command) for GitHub operations.
+- Do NOT use GitLens or other UI tools
+- Use `gh pr create`, `gh pr view`, `gh pr merge` for PR operations
+- Use `gh issue create`, `gh issue list` for issue management
+- See `.agent.md` "Git & GitHub CLI Workflow" section for detailed commands
+
 ## Guidelines for AI
 - 日本語で応答してください
 - コード変更時は英語のコメント・変数名を保持してください
@@ -30,6 +37,6 @@ architecture: "Clean Architecture"
 5. セキュリティベストプラクティス
 
 ## Reference Files
-- .agent.md: AI 開発ガイドライン（読み込み推奨）
+- .agent.md: AI 開発ガイドライン（読み込み推奨）、Git & GitHub CLI Workflow セクション参照
 - docs/architecture.md: アーキテクチャ設計
 - docs/swagger.yaml: API 仕様
