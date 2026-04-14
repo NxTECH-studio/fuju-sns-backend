@@ -9,17 +9,14 @@ linters:
     - govet
     - errcheck
     - staticcheck
-    - gosimple
     - ineffassign
     - unused
-    - goimports
     - gocyclo
     - dupl
     - goconst
     - unconvert
     - misspell
     - gocritic
-    - stylecheck
     - unparam
     - nakedret
     - revive
@@ -28,6 +25,10 @@ linters:
     - golint
     - maligned
     - prealloc
+
+formatters:
+  enable:
+    - goimports
 
 issues:
   max-same-issues: 10
