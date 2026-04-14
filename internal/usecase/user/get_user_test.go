@@ -17,7 +17,7 @@ type MockUserRepository struct {
 }
 
 // Create creates a new user in mock
-func (m *MockUserRepository) Create(ctx context.Context, user *domain.User) (*domain.User, error) {
+func (m *MockUserRepository) Create(_ context.Context, user *domain.User) (*domain.User, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -26,7 +26,7 @@ func (m *MockUserRepository) Create(ctx context.Context, user *domain.User) (*do
 }
 
 // GetByID retrieves a user by ID from mock
-func (m *MockUserRepository) GetByID(ctx context.Context, id int64) (*domain.User, error) {
+func (m *MockUserRepository) GetByID(_ context.Context, id int64) (*domain.User, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -38,7 +38,7 @@ func (m *MockUserRepository) GetByID(ctx context.Context, id int64) (*domain.Use
 }
 
 // GetByUsername retrieves a user by username from mock
-func (m *MockUserRepository) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
+func (m *MockUserRepository) GetByUsername(_ context.Context, username string) (*domain.User, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -51,7 +51,7 @@ func (m *MockUserRepository) GetByUsername(ctx context.Context, username string)
 }
 
 // GetByEmail retrieves a user by email from mock
-func (m *MockUserRepository) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
+func (m *MockUserRepository) GetByEmail(_ context.Context, email string) (*domain.User, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -64,7 +64,7 @@ func (m *MockUserRepository) GetByEmail(ctx context.Context, email string) (*dom
 }
 
 // GetByOAuthID retrieves a user by OAuth ID from mock
-func (m *MockUserRepository) GetByOAuthID(ctx context.Context, provider, oauthID string) (*domain.User, error) {
+func (m *MockUserRepository) GetByOAuthID(_ context.Context, provider, oauthID string) (*domain.User, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -77,7 +77,7 @@ func (m *MockUserRepository) GetByOAuthID(ctx context.Context, provider, oauthID
 }
 
 // Update updates a user in mock
-func (m *MockUserRepository) Update(ctx context.Context, id int64, req *domain.UpdateUserRequest) (*domain.User, error) {
+func (m *MockUserRepository) Update(_ context.Context, id int64, req *domain.UpdateUserRequest) (*domain.User, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
@@ -99,7 +99,7 @@ func (m *MockUserRepository) Update(ctx context.Context, id int64, req *domain.U
 }
 
 // Delete soft-deletes a user in mock
-func (m *MockUserRepository) Delete(ctx context.Context, id int64) error {
+func (m *MockUserRepository) Delete(_ context.Context, id int64) error {
 	if m.err != nil {
 		return m.err
 	}
@@ -113,7 +113,7 @@ func (m *MockUserRepository) Delete(ctx context.Context, id int64) error {
 }
 
 // List lists users from mock
-func (m *MockUserRepository) List(ctx context.Context, limit, offset int) ([]*domain.User, int64, error) {
+func (m *MockUserRepository) List(_ context.Context, limit, offset int) ([]*domain.User, int64, error) {
 	if m.err != nil {
 		return nil, 0, m.err
 	}
