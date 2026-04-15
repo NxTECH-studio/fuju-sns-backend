@@ -263,7 +263,7 @@ func NewCommentRepository() repository.CommentRepository {
 }
 
 // GetByID retrieves a comment by ID
-func (r *CommentRepository) GetByID(ctx context.Context, id int64) (*domain.Comment, error) {
+func (r *CommentRepository) GetByID(_ context.Context, id int64) (*domain.Comment, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -277,7 +277,7 @@ func (r *CommentRepository) GetByID(ctx context.Context, id int64) (*domain.Comm
 }
 
 // ListByPostID retrieves comments for a post
-func (r *CommentRepository) ListByPostID(ctx context.Context, postID int64, limit, offset int) ([]*domain.Comment, int, error) {
+func (r *CommentRepository) ListByPostID(_ context.Context, postID int64, limit, offset int) ([]*domain.Comment, int, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -303,7 +303,7 @@ func (r *CommentRepository) ListByPostID(ctx context.Context, postID int64, limi
 }
 
 // Create creates a new comment
-func (r *CommentRepository) Create(ctx context.Context, comment *domain.Comment) (*domain.Comment, error) {
+func (r *CommentRepository) Create(_ context.Context, comment *domain.Comment) (*domain.Comment, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -318,7 +318,7 @@ func (r *CommentRepository) Create(ctx context.Context, comment *domain.Comment)
 }
 
 // Delete soft-deletes a comment
-func (r *CommentRepository) Delete(ctx context.Context, id int64) error {
+func (r *CommentRepository) Delete(_ context.Context, id int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

@@ -207,7 +207,7 @@ jobs:
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `### ❌ コミットメッセージ形式のエラー\n\nConventional Commits 形式に従ってください：\n\`\`\`\ntype(scope): 説明\n\nBody（オプション）\nFooter（オプション）\n\`\`\`\n\nTypes: \`feat\`, \`fix\`, \`docs\`, \`test\`, \`refactor\`, \`chore\`, \`add\`, `\ci\``
+              body: `### ❌ コミットメッセージ形式のエラー\n\nConventional Commits 形式に従ってください：\n\`\`\`\ntype(scope): 説明\n\nBody（オプション）\nFooter（オプション）\n\`\`\`\n\nTypes: \\\`feat\\\`, \\\`fix\\\`, \\\`docs\\\`, \\\`test\\\`, \\\`refactor\\\`, \\\`chore\\\`, \\\`add\\\``
             });
 
   notify-review:
