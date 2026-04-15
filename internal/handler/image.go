@@ -53,7 +53,9 @@ func (h *ImageHandler) UploadImage(w http.ResponseWriter, r *http.Request) {
 		WriteErrorResponse(w, errors.InvalidRequest("file field is required", err))
 		return
 	}
-	defer file.Close()
+	defer func() {
+		_ = file.Close()
+	}()
 
 	// Read file data
 	fileData, err := io.ReadAll(file)

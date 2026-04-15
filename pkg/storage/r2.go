@@ -35,20 +35,25 @@ func NewR2Service() (*R2Service, error) {
 	}
 
 	// Create custom endpoint resolver for R2
+	//nolint:staticcheck
 	customResolver := aws.EndpointResolverWithOptionsFunc(
-		func(service, region string, options ...interface{}) (aws.Endpoint, error) {
+		func(service, _region string, options ...interface{}) (aws.Endpoint, error) {
 			if service == s3.ServiceID {
+				//nolint:staticcheck
 				return aws.Endpoint{
 					URL:           endpoint,
 					SigningRegion: "auto",
 				}, nil
 			}
+			//nolint:staticcheck
 			return aws.Endpoint{}, fmt.Errorf("unknown service")
 		},
 	)
 
 	// Load AWS configuration with custom credentials and endpoint
+	//nolint:staticcheck
 	cfg, err := config.LoadDefaultConfig(context.Background(),
+		//nolint:staticcheck
 		config.WithEndpointResolverWithOptions(customResolver),
 		config.WithCredentialsProvider(
 			aws.NewCredentialsCache(

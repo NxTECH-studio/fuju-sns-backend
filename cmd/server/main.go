@@ -90,7 +90,6 @@ func main() {
 		log.Warn(ctx, "Failed to initialize R2 service", err)
 		r2Service = nil
 	}
-	
 	var imageHandler *handler.ImageHandler
 	if r2Service != nil {
 		uploadImageUC := imageusecase.NewUploadImageUseCase(imageRepo, r2Service)
