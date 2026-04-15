@@ -247,7 +247,7 @@ func NewHealthHandler() *HealthHandler {
 func (h *HealthHandler) Health(w http.ResponseWriter, r *http.Request) {
 	resp := response.HealthResponse{
 		Status:    "ok",
-		Timestamp: time.Now().UTC(),
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
 	}
 
 	writeJSONResponse(w, resp, http.StatusOK)
