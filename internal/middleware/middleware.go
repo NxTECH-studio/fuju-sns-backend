@@ -16,6 +16,7 @@ import (
 )
 
 const (
+	// ContentTypeJSON is the content type header for JSON responses.
 	ContentTypeJSON = "application/json"
 )
 
@@ -146,7 +147,10 @@ func CORSMiddleware() func(http.Handler) http.Handler {
 func writeJSONErrorResponse(w http.ResponseWriter, statusCode int, errResp response.ErrorResponse) {
 	w.Header().Set("Content-Type", ContentTypeJSON)
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(errResp)
+	if err := json.NewEncoder(w).Encode(errResp); err != nil {
+		// Log encoding error but don't stop processing
+		_ = err
+	}
 }
 
 // ContextTimeoutMiddleware adds a timeout to context

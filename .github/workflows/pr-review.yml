@@ -117,7 +117,7 @@ jobs:
           echo "### 📝 Reviewer Notes" >> /tmp/review_body.txt
           echo "" >> /tmp/review_body.txt
           echo "1. Check if CHANGELOG.md or release notes need updating" >> /tmp/review_body.txt
-          echo "2. Verify commit messages follow convention (feat/fix/docs/test/refactor/chore)" >> /tmp/review_body.txt
+          echo "2. Verify commit messages follow convention (feat/fix/docs/test/refactor/chore/add/ci)" >> /tmp/review_body.txt
           echo "3. Review database migrations if applicable" >> /tmp/review_body.txt
           echo "4. Ensure environment variable documentation is updated" >> /tmp/review_body.txt
           echo "" >> /tmp/review_body.txt
@@ -192,7 +192,7 @@ jobs:
 
           if [ -z "$COMMIT_MSG" ]; then
             echo "invalid=false" >> $GITHUB_OUTPUT
-          elif ! echo "$COMMIT_MSG" | grep -E "^(feat|fix|docs|test|refactor|chore|add)(\(.+\))?:" >/dev/null 2>&1; then
+          elif ! echo "$COMMIT_MSG" | grep -E "^(feat|fix|docs|test|refactor|chore|add|ci)(\(.+\))?:" >/dev/null 2>&1; then
             echo "invalid=true" >> $GITHUB_OUTPUT
           else
             echo "invalid=false" >> $GITHUB_OUTPUT
@@ -207,7 +207,7 @@ jobs:
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `### ❌ コミットメッセージ形式のエラー\n\nConventional Commits 形式に従ってください：\n\`\`\`\ntype(scope): 説明\n\nBody（オプション）\nFooter（オプション）\n\`\`\`\n\nTypes: \`feat\`, \`fix\`, \`docs\`, \`test\`, \`refactor\`, \`chore\`, \`add\``
+              body: `### ❌ コミットメッセージ形式のエラー\n\nConventional Commits 形式に従ってください：\n\`\`\`\ntype(scope): 説明\n\nBody（オプション）\nFooter（オプション）\n\`\`\`\n\nTypes: \`feat\`, \`fix\`, \`docs\`, \`test\`, \`refactor\`, \`chore\`, \`add\`, `\ci\``
             });
 
   notify-review:

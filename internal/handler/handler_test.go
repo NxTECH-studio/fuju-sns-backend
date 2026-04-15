@@ -165,7 +165,7 @@ func (m *MockUserRepository) GetByID(_ context.Context, id int64) (*domain.User,
 	return user, nil
 }
 
-func (m *MockUserRepository) GetByUsername(_ context.Context, username string) (*domain.User, error) {
+func (m *MockUserRepository) GetByUsername(_ context.Context, _ string) (*domain.User, error) {
 	return nil, nil
 }
 
@@ -181,7 +181,7 @@ func (m *MockUserRepository) GetByEmail(_ context.Context, email string) (*domai
 	return nil, &domain.UserNotFoundError{ID: 0}
 }
 
-func (m *MockUserRepository) GetByOAuthID(_ context.Context, provider, oauthID string) (*domain.User, error) {
+func (m *MockUserRepository) GetByOAuthID(_ context.Context, _, _ string) (*domain.User, error) {
 	return nil, nil
 }
 
@@ -201,7 +201,7 @@ func (m *MockUserRepository) Delete(_ context.Context, id int64) error {
 	return nil
 }
 
-func (m *MockUserRepository) List(_ context.Context, limit, offset int) ([]*domain.User, int, error) {
+func (m *MockUserRepository) List(_ context.Context, _, _ int) ([]*domain.User, int, error) {
 	if m.err != nil {
 		return nil, 0, m.err
 	}

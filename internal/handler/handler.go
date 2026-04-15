@@ -15,6 +15,7 @@ import (
 )
 
 const (
+	// ContentTypeJSON is the content type header for JSON responses.
 	ContentTypeJSON = "application/json"
 )
 
@@ -197,7 +198,10 @@ func parsePaginationParams(r *http.Request) (int, int) {
 func writeJSONResponse(w http.ResponseWriter, data interface{}, statusCode int) {
 	w.Header().Set("Content-Type", ContentTypeJSON)
 	w.WriteHeader(statusCode)
-	json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		// Log encoding error but don't stop processing
+		_ = err
+	}
 }
 
 // WriteSuccessResponse writes a successful JSON response
@@ -244,7 +248,7 @@ func NewHealthHandler() *HealthHandler {
 }
 
 // Health handles GET /health
-func (h *HealthHandler) Health(w http.ResponseWriter, r *http.Request) {
+func (h *HealthHandler) Health(w http.ResponseWriter, _ *http.Request) {
 	resp := response.HealthResponse{
 		Status:    "ok",
 		Timestamp: time.Now().UTC().Format(time.RFC3339),

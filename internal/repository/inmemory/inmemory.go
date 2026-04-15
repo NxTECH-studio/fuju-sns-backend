@@ -26,7 +26,7 @@ func NewUserRepository() repository.UserRepository {
 }
 
 // GetByID retrieves a user by ID
-func (r *UserRepository) GetByID(ctx context.Context, id int64) (*domain.User, error) {
+func (r *UserRepository) GetByID(_ context.Context, id int64) (*domain.User, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -40,7 +40,7 @@ func (r *UserRepository) GetByID(ctx context.Context, id int64) (*domain.User, e
 }
 
 // GetByUsername retrieves a user by username
-func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
+func (r *UserRepository) GetByUsername(_ context.Context, username string) (*domain.User, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -55,7 +55,7 @@ func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*d
 }
 
 // GetByOAuthID retrieves a user by OAuth provider and ID
-func (r *UserRepository) GetByOAuthID(ctx context.Context, provider, oauthID string) (*domain.User, error) {
+func (r *UserRepository) GetByOAuthID(_ context.Context, provider, oauthID string) (*domain.User, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -70,7 +70,7 @@ func (r *UserRepository) GetByOAuthID(ctx context.Context, provider, oauthID str
 }
 
 // List retrieves a paginated list of users
-func (r *UserRepository) List(ctx context.Context, limit, offset int) ([]*domain.User, int, error) {
+func (r *UserRepository) List(_ context.Context, limit, offset int) ([]*domain.User, int, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -96,7 +96,7 @@ func (r *UserRepository) List(ctx context.Context, limit, offset int) ([]*domain
 }
 
 // Create creates a new user
-func (r *UserRepository) Create(ctx context.Context, user *domain.User) (*domain.User, error) {
+func (r *UserRepository) Create(_ context.Context, user *domain.User) (*domain.User, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -111,7 +111,7 @@ func (r *UserRepository) Create(ctx context.Context, user *domain.User) (*domain
 }
 
 // Update updates an existing user
-func (r *UserRepository) Update(ctx context.Context, user *domain.User) (*domain.User, error) {
+func (r *UserRepository) Update(_ context.Context, user *domain.User) (*domain.User, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -126,7 +126,7 @@ func (r *UserRepository) Update(ctx context.Context, user *domain.User) (*domain
 }
 
 // Delete soft-deletes a user
-func (r *UserRepository) Delete(ctx context.Context, id int64) error {
+func (r *UserRepository) Delete(_ context.Context, id int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -154,7 +154,7 @@ func NewPostRepository() repository.PostRepository {
 }
 
 // GetByID retrieves a post by ID
-func (r *PostRepository) GetByID(ctx context.Context, id int64) (*domain.Post, error) {
+func (r *PostRepository) GetByID(_ context.Context, id int64) (*domain.Post, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -168,7 +168,7 @@ func (r *PostRepository) GetByID(ctx context.Context, id int64) (*domain.Post, e
 }
 
 // List retrieves a paginated list of posts
-func (r *PostRepository) List(ctx context.Context, userID *int64, limit, offset int) ([]*domain.Post, int, error) {
+func (r *PostRepository) List(_ context.Context, userID *int64, limit, offset int) ([]*domain.Post, int, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -196,7 +196,7 @@ func (r *PostRepository) List(ctx context.Context, userID *int64, limit, offset 
 }
 
 // Create creates a new post
-func (r *PostRepository) Create(ctx context.Context, post *domain.Post) (*domain.Post, error) {
+func (r *PostRepository) Create(_ context.Context, post *domain.Post) (*domain.Post, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -211,7 +211,7 @@ func (r *PostRepository) Create(ctx context.Context, post *domain.Post) (*domain
 }
 
 // Delete soft-deletes a post
-func (r *PostRepository) Delete(ctx context.Context, id int64) error {
+func (r *PostRepository) Delete(_ context.Context, id int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -224,7 +224,7 @@ func (r *PostRepository) Delete(ctx context.Context, id int64) error {
 }
 
 // IncrementCommentCount increments the comment count
-func (r *PostRepository) IncrementCommentCount(ctx context.Context, postID int64) error {
+func (r *PostRepository) IncrementCommentCount(_ context.Context, postID int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -236,7 +236,7 @@ func (r *PostRepository) IncrementCommentCount(ctx context.Context, postID int64
 }
 
 // DecrementCommentCount decrements the comment count
-func (r *PostRepository) DecrementCommentCount(ctx context.Context, postID int64) error {
+func (r *PostRepository) DecrementCommentCount(_ context.Context, postID int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
