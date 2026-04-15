@@ -37,7 +37,7 @@ func NewR2Service() (*R2Service, error) {
 	// Create custom endpoint resolver for R2
 	//nolint:staticcheck
 	customResolver := aws.EndpointResolverWithOptionsFunc(
-		func(service, _region string, options ...interface{}) (aws.Endpoint, error) {
+		func(service, _ string, options ...interface{}) (aws.Endpoint, error) {
 			if service == s3.ServiceID {
 				//nolint:staticcheck
 				return aws.Endpoint{
