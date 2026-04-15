@@ -66,3 +66,18 @@ type CommentRepository interface {
 	// Delete soft-deletes a comment
 	Delete(ctx context.Context, id int64) error
 }
+
+// ImageRepository defines image persistence operations
+type ImageRepository interface {
+	// GetByID retrieves an image by ID
+	GetByID(ctx context.Context, id string) (*domain.Image, error)
+
+	// GetByUserID retrieves all images for a user
+	GetByUserID(ctx context.Context, userID int64) ([]*domain.Image, error)
+
+	// Create stores a new image record
+	Create(ctx context.Context, image *domain.Image) (*domain.Image, error)
+
+	// Delete soft-deletes an image
+	Delete(ctx context.Context, id string) error
+}

@@ -329,3 +329,72 @@ func (r *CommentRepository) Delete(_ context.Context, id int64) error {
 
 	return nil
 }
+
+// ImageRepository is an in-memory implementation of the ImageRepository interface
+type ImageRepository struct {
+	mu     sync.RWMutex
+	images map[string]*domain.Image
+}
+
+// NewImageRepository creates a new in-memory image repository
+func NewImageRepository() repository.ImageRepository {
+	return &ImageRepository{
+		images: make(map[string]*domain.Image),
+	}
+}
+
+// GetByID retrieves an image by ID
+func (r *ImageRepository) GetByID(_ context.Context, id string) (*domain.Image, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	image, ok := r.images[id]
+	if !ok || image.DeletedAt != nil {
+		return nil, nil
+	}
+
+	imageCopy := *image
+	return &imageCopy, nil
+}
+
+// GetByUserID retrieves all images for a user
+func (r *ImageRepository) GetByUserID(_ context.Context, userID int64) ([]*domain.Image, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	var images []*domain.Image
+	for _, image := range r.images {
+		if image.UserID == userID && image.DeletedAt == nil {
+			imageCopy := *image
+			images = append(images, &imageCopy)
+		}
+	}
+
+	return images, nil
+}
+
+// Create stores a new image record
+func (r *ImageRepository) Create(_ context.Context, image *domain.Image) (*domain.Image, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	image.CreatedAt = time.Now()
+	image.UpdatedAt = time.Now()
+
+	imageCopy := *image
+	r.images[image.ID] = &imageCopy
+	return &imageCopy, nil
+}
+
+// Delete soft-deletes an image
+func (r *ImageRepository) Delete(_ context.Context, id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if image, ok := r.images[id]; ok {
+		now := time.Now()
+		image.DeletedAt = &now
+	}
+
+	return nil
+}
