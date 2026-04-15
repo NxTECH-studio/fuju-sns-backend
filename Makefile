@@ -1,4 +1,4 @@
-.PHONY: setup build test lint fmt fmt-fix clean run help
+.PHONY: setup build test lint fmt fmt-fix clean run help db-up db-down db-init db-reset db-shell
 
 # Variables
 BINARY_NAME=fuju-backend
@@ -6,16 +6,36 @@ GO=go
 GOFLAGS=-v
 LDFLAGS=-ldflags "-X main.Version=$(shell git describe --tags --always --dirty)"
 
+# Database variables
+DB_HOST ?= localhost
+DB_PORT ?= 5432
+DB_NAME ?= fuju
+DB_USER ?= fuju_user
+DB_PASSWORD ?= fuju_password
+
 # Help command
 help:
 	@echo "Available commands:"
+	@echo ""
+	@echo "Build & Run:"
 	@echo "  make setup         - Install dependencies and tools"
 	@echo "  make build         - Build the binary"
 	@echo "  make run           - Run the server locally"
+	@echo ""
+	@echo "Testing & Quality:"
 	@echo "  make test          - Run all tests with coverage"
 	@echo "  make test-verbose  - Run tests with verbose output"
 	@echo "  make lint          - Run linters (golangci-lint)"
 	@echo "  make fmt           - Format code (go fmt)"
+	@echo ""
+	@echo "Database:"
+	@echo "  make db-up         - Start PostgreSQL and Redis with Docker Compose"
+	@echo "  make db-down       - Stop and remove database containers"
+	@echo "  make db-init       - Initialize database with migrations"
+	@echo "  make db-reset      - Reset database (WARNING: Deletes all data)"
+	@echo "  make db-shell      - Connect to PostgreSQL shell"
+	@echo ""
+	@echo "Other:"
 	@echo "  make clean         - Clean build artifacts"
 	@echo ""
 
@@ -77,6 +97,50 @@ fmt-fix:
 	@echo "  - Add exported function comments"
 	@echo "  - Rename unused parameters to _"
 	@echo "  - Add error checks for fmt.Fprintf/Fprintln"
+
+# Clean build artifacts
+clean:
+	@echo "Cleaning build artifacts..."
+	$(GO) clean
+	rm -f bin/$(BINARY_NAME)
+	rm -f coverage.out
+	@echo "Clean complete!"
+
+# Database commands
+db-up:
+	@echo "Starting database services with Docker Compose..."
+	docker-compose up -d
+	@echo "Database services started!"
+	@echo "PostgreSQL: localhost:5432"
+	@echo "Redis: localhost:6379"
+	@echo "Adminer: http://localhost:8081"
+
+db-down:
+	@echo "Stopping database services..."
+	docker-compose down
+	@echo "Database services stopped!"
+
+db-init:
+	@echo "Initializing database with migrations..."
+	./db/init.sh
+	@echo "Database initialized!"
+
+db-reset:
+	@echo "WARNING: This will delete all database data!"
+	@read -p "Are you sure? (y/n) " -n 1 -r; \
+	echo; \
+	if [[ $$REPLY =~ ^[Yy]$$ ]]; then \
+		docker-compose down -v; \
+		docker-compose up -d; \
+		./db/init.sh; \
+		echo "Database reset complete!"; \
+	else \
+		echo "Database reset cancelled."; \
+	fi
+
+db-shell:
+	@echo "Connecting to PostgreSQL..."
+	PGPASSWORD="$(DB_PASSWORD)" psql -h $(DB_HOST) -p $(DB_PORT) -U $(DB_USER) -d $(DB_NAME)
 
 # Clean build artifacts
 clean:
