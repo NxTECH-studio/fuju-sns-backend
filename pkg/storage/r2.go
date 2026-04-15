@@ -143,7 +143,7 @@ func NewStaticCredentialsProvider(accessKeyID, secretAccessKey string) *StaticCr
 }
 
 // Retrieve returns the credentials
-func (p *StaticCredentialsProvider) Retrieve(ctx context.Context) (aws.Credentials, error) {
+func (p *StaticCredentialsProvider) Retrieve(_ context.Context) (aws.Credentials, error) {
 	return aws.Credentials{
 		AccessKeyID:     p.accessKeyID,
 		SecretAccessKey: p.secretAccessKey,

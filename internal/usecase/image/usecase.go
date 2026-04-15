@@ -37,7 +37,8 @@ func (uc *UploadImageUseCase) Execute(ctx context.Context, req *domain.UploadIma
 		return nil, errors.InvalidRequest("file data is empty", nil)
 	}
 
-	if req.FileSize = int64(len(req.FileData)); req.FileSize > 5*1024*1024 { // 5MB limit
+	req.FileSize = int64(len(req.FileData))
+	if req.FileSize > 5*1024*1024 { // 5MB limit
 		return nil, errors.InvalidRequest("file size exceeds 5MB limit", nil)
 	}
 
