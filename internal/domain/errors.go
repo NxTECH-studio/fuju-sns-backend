@@ -88,3 +88,17 @@ type DuplicateEmailError struct {
 func (e *DuplicateEmailError) Error() string {
 	return fmt.Sprintf("duplicate email: %s", e.Email)
 }
+
+// ValidationError indicates data validation failed
+type ValidationError struct {
+	Reason string
+}
+
+func (e *ValidationError) Error() string {
+	return fmt.Sprintf("validation error: %s", e.Reason)
+}
+
+// NewValidationError creates a new validation error
+func NewValidationError(reason string) error {
+	return &ValidationError{Reason: reason}
+}
