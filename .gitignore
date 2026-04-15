@@ -48,6 +48,12 @@ logs/
 
 # Database
 *.db
+
+# But include database migrations and scripts
+!db/
+!db/migrations/
+!db/migrations/*.sql
+!db/init.sh
 *.sqlite
 *.sqlite3
 
