@@ -1,8 +1,8 @@
-package storage
 // Package storage provides cloud storage implementations.
 package storage
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -91,7 +91,7 @@ func (r *R2Service) Upload(ctx interface{}, req *domain.UploadImageRequest) (sto
 	_, err = r.client.PutObject(reqCtx, &s3.PutObjectInput{
 		Bucket:      aws.String(r.bucketName),
 		Key:         aws.String(storageKey),
-		Body:        bodyReader(req.FileData),
+		Body:        bytes.NewReader(req.FileData),
 		ContentType: aws.String(req.MimeType),
 	})
 
@@ -160,15 +160,4 @@ func (p *StaticCredentialsProvider) Retrieve(ctx context.Context) (aws.Credentia
 		AccessKeyID:     p.accessKeyID,
 		SecretAccessKey: p.secretAccessKey,
 	}, nil
-}
-
-// bodyReader converts []byte to io.Reader
-type bodyReader []byte
-
-func (b bodyReader) Read(p []byte) (n int, err error) {
-	n = copy(p, b)
-	if n == 0 && len(b) > 0 {
-		err = fmt.Errorf("EOF")
-	}
-	return n, err
 }
