@@ -15,6 +15,10 @@ import (
 	"github.com/fuju/backend/pkg/response"
 )
 
+const (
+	ContentTypeJSON = "application/json"
+)
+
 // ResponseWriter wraps http.ResponseWriter to capture status code
 type responseWriter struct {
 	http.ResponseWriter
@@ -57,34 +61,39 @@ func LoggingMiddleware(log *logger.Logger) func(http.Handler) http.Handler {
 	}
 }
 
+// extractUserIDFromAuthHeader validates JWT token and extracts user ID
+func extractUserIDFromAuthHeader(tokenManager *auth.TokenManager, authHeader string) (int64, bool) {
+	if authHeader == "" {
+		return 0, false
+	}
+
+	parts := strings.SplitN(authHeader, " ", 2)
+	if len(parts) != 2 || parts[0] != "Bearer" {
+		return 0, false
+	}
+
+	claims, err := tokenManager.ValidateToken(parts[1])
+	if err != nil {
+		return 0, false
+	}
+
+	return claims.UserID, true
+}
+
 // AuthMiddleware validates JWT tokens or session cookies
 func AuthMiddleware(tokenManager *auth.TokenManager) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			var userID int64
-			found := false
-
 			authHeader := r.Header.Get("Authorization")
-			if authHeader != "" {
-				parts := strings.SplitN(authHeader, " ", 2)
-				if len(parts) == 2 && parts[0] == "Bearer" {
-					claims, err := tokenManager.ValidateToken(parts[1])
-					if err == nil {
-						userID = claims.UserID
-						found = true
-					}
-				}
-			}
+			userID, found := extractUserIDFromAuthHeader(tokenManager, authHeader)
 
 			if !found {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusUnauthorized)
 				errResp := response.ErrorResponse{
 					Code:      errors.ErrUnauthorized,
 					Message:   "Missing or invalid authentication",
 					Timestamp: time.Now(),
 				}
-				json.NewEncoder(w).Encode(errResp)
+				writeJSONErrorResponse(w, http.StatusUnauthorized, errResp)
 				return
 			}
 
@@ -102,14 +111,12 @@ func RecoveryMiddleware(log *logger.Logger) func(http.Handler) http.Handler {
 				if err := recover(); err != nil {
 					panicErr := fmt.Errorf("panic recovered: %v", err)
 					log.Error(r.Context(), "Panic recovered", panicErr)
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusInternalServerError)
 					errResp := response.ErrorResponse{
 						Code:      errors.ErrInternal,
 						Message:   "Internal server error",
 						Timestamp: time.Now(),
 					}
-					json.NewEncoder(w).Encode(errResp)
+					writeJSONErrorResponse(w, http.StatusInternalServerError, errResp)
 				}
 			}()
 			next.ServeHTTP(w, r)
@@ -133,6 +140,13 @@ func CORSMiddleware() func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// writeJSONErrorResponse writes a JSON error response with appropriate status code
+func writeJSONErrorResponse(w http.ResponseWriter, statusCode int, errResp response.ErrorResponse) {
+	w.Header().Set("Content-Type", ContentTypeJSON)
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(errResp)
 }
 
 // ContextTimeoutMiddleware adds a timeout to context
