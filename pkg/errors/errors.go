@@ -126,31 +126,3 @@ func ToHTTPStatus(err error) int {
 	}
 	return http.StatusInternalServerError
 }
-
-// ErrorResponse represents a standardized error response format.
-type ErrorResponse struct {
-	Code      string      `json:"code"`
-	Message   string      `json:"message"`
-	Timestamp string      `json:"timestamp"`
-	Details   interface{} `json:"details,omitempty"`
-}
-
-// NewErrorResponse creates a new error response from AppError
-func NewErrorResponse(err error, details interface{}) *ErrorResponse {
-	var code, message string
-
-	if appErr, ok := IsAppError(err); ok {
-		code = appErr.Code
-		message = appErr.Message
-	} else {
-		code = ErrInternal
-		message = "Internal Server Error"
-	}
-
-	return &ErrorResponse{
-		Code:      code,
-		Message:   message,
-		Timestamp: "",
-		Details:   details,
-	}
-}
