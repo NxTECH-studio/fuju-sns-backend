@@ -8,16 +8,16 @@ import (
 
 // Image represents an uploaded image entity
 type Image struct {
-	ID         string    // UUID
-	StorageKey string    // Path in R2 storage (e.g., images/uuid/filename)
-	FileName   string    // Original file name
-	MimeType   string    // Content type (e.g., image/jpeg)
-	FileSize   int64     // Size in bytes
-	PublicURL  string    // Public accessible URL
-	CreatedAt  time.Time // Creation timestamp
-	UpdatedAt  time.Time // Last update timestamp
+	ID         string     // UUID
+	StorageKey string     // Path in R2 storage (e.g., images/uuid/filename)
+	FileName   string     // Original file name
+	MimeType   string     // Content type (e.g., image/jpeg)
+	FileSize   int64      // Size in bytes
+	PublicURL  string     // Public accessible URL
+	CreatedAt  time.Time  // Creation timestamp
+	UpdatedAt  time.Time  // Last update timestamp
 	DeletedAt  *time.Time // Soft delete timestamp
-	UserID     int64     // User who uploaded the image
+	UserID     int64      // User who uploaded the image
 }
 
 // UploadImageRequest represents an image upload request

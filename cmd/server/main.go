@@ -15,10 +15,12 @@ import (
 	"github.com/fuju/backend/internal/middleware"
 	"github.com/fuju/backend/internal/repository/inmemory"
 	commentusecase "github.com/fuju/backend/internal/usecase/comment"
+	imageusecase "github.com/fuju/backend/internal/usecase/image"
 	postusecase "github.com/fuju/backend/internal/usecase/post"
 	userusecase "github.com/fuju/backend/internal/usecase/user"
 	"github.com/fuju/backend/pkg/auth"
 	"github.com/fuju/backend/pkg/logger"
+	"github.com/fuju/backend/pkg/storage"
 )
 
 var (
@@ -81,6 +83,22 @@ func main() {
 	commentDeleteUC := commentusecase.NewDeleteCommentUseCase(commentRepo, postRepo)
 	commentHandler := handler.NewCommentHandlerImpl(commentAddUC, commentDeleteUC)
 
+	// Image handlers
+	imageRepo := inmemory.NewImageRepository()
+	r2Service, err := storage.NewR2Service()
+	if err != nil {
+		log.Warn(ctx, "Failed to initialize R2 service", err)
+		r2Service = nil
+	}
+	
+	var imageHandler *handler.ImageHandler
+	if r2Service != nil {
+		uploadImageUC := imageusecase.NewUploadImageUseCase(imageRepo, r2Service)
+		getUserImagesUC := imageusecase.NewGetUserImagesUseCase(imageRepo)
+		deleteImageUC := imageusecase.NewDeleteImageUseCase(imageRepo, r2Service)
+		imageHandler = handler.NewImageHandler(uploadImageUC, getUserImagesUC, deleteImageUC)
+	}
+
 	// Register routes
 	// Health
 	mux.HandleFunc("GET /health", healthHandler.Health)
@@ -112,6 +130,19 @@ func main() {
 	mux.HandleFunc("DELETE /posts/{post_id}/comments/{comment_id}", middleware.AuthMiddleware(tokenManager)(
 		http.HandlerFunc(commentHandler.DeleteComment),
 	).ServeHTTP)
+
+	// Images (if R2 is configured)
+	if imageHandler != nil {
+		mux.HandleFunc("POST /v1/images", middleware.AuthMiddleware(tokenManager)(
+			http.HandlerFunc(imageHandler.UploadImage),
+		).ServeHTTP)
+		mux.HandleFunc("GET /v1/images", middleware.AuthMiddleware(tokenManager)(
+			http.HandlerFunc(imageHandler.GetUserImages),
+		).ServeHTTP)
+		mux.HandleFunc("DELETE /v1/images/{id}", middleware.AuthMiddleware(tokenManager)(
+			http.HandlerFunc(imageHandler.DeleteImage),
+		).ServeHTTP)
+	}
 
 	// Apply global middleware
 	var apiHandler http.Handler = mux
