@@ -145,4 +145,3 @@ func ContextTimeoutMiddleware(timeout time.Duration) func(http.Handler) http.Han
 		})
 	}
 }
-
