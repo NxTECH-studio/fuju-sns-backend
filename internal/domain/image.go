@@ -2,6 +2,7 @@
 package domain
 
 import (
+	"context"
 	"time"
 )
 
@@ -31,10 +32,10 @@ type UploadImageRequest struct {
 // StorageService defines file storage operations
 type StorageService interface {
 	// Upload uploads a file to R2 storage
-	Upload(ctx interface{}, req *UploadImageRequest) (storageKey, publicURL string, err error)
+	Upload(ctx context.Context, req *UploadImageRequest) (storageKey, publicURL string, err error)
 
 	// Delete deletes a file from R2 storage
-	Delete(ctx interface{}, storageKey string) error
+	Delete(ctx context.Context, storageKey string) error
 
 	// GetPublicURL returns the public URL for a storage key
 	GetPublicURL(storageKey string) string

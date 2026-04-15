@@ -77,18 +77,12 @@ func NewR2Service() (*R2Service, error) {
 }
 
 // Upload uploads a file to R2 storage
-func (r *R2Service) Upload(ctx interface{}, req *domain.UploadImageRequest) (storageKey, publicURL string, err error) {
+func (r *R2Service) Upload(ctx context.Context, req *domain.UploadImageRequest) (storageKey, publicURL string, err error) {
 	// Generate storage key: images/{userID}/{uuid}/{filename}
 	storageKey = fmt.Sprintf("images/%d/%s", req.UserID, req.FileName)
 
-	// Convert context to proper type
-	reqCtx, ok := ctx.(context.Context)
-	if !ok {
-		reqCtx = context.Background()
-	}
-
 	// Upload to R2
-	_, err = r.client.PutObject(reqCtx, &s3.PutObjectInput{
+	_, err = r.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket:      aws.String(r.bucketName),
 		Key:         aws.String(storageKey),
 		Body:        bytes.NewReader(req.FileData),
@@ -109,14 +103,8 @@ func (r *R2Service) Upload(ctx interface{}, req *domain.UploadImageRequest) (sto
 }
 
 // Delete deletes a file from R2 storage
-func (r *R2Service) Delete(ctx interface{}, storageKey string) error {
-	// Convert context to proper type
-	reqCtx, ok := ctx.(context.Context)
-	if !ok {
-		reqCtx = context.Background()
-	}
-
-	_, err := r.client.DeleteObject(reqCtx, &s3.DeleteObjectInput{
+func (r *R2Service) Delete(ctx context.Context, storageKey string) error {
+	_, err := r.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(r.bucketName),
 		Key:    aws.String(storageKey),
 	})
