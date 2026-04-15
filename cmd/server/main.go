@@ -11,6 +11,13 @@ import (
 	"time"
 
 	"github.com/fuju/backend/config"
+	"github.com/fuju/backend/internal/handler"
+	"github.com/fuju/backend/internal/middleware"
+	"github.com/fuju/backend/internal/repository/inmemory"
+	commentusecase "github.com/fuju/backend/internal/usecase/comment"
+	postusecase "github.com/fuju/backend/internal/usecase/post"
+	userusecase "github.com/fuju/backend/internal/usecase/user"
+	"github.com/fuju/backend/pkg/auth"
 	"github.com/fuju/backend/pkg/logger"
 )
 
@@ -37,26 +44,86 @@ func main() {
 		"environment", cfg.Environment,
 	)
 
-	// Create HTTP server
+	// Initialize repositories (in-memory for now)
+	userRepo := inmemory.NewUserRepository()
+	postRepo := inmemory.NewPostRepository()
+	commentRepo := inmemory.NewCommentRepository()
+
+	// Initialize token manager
+	tokenManager := auth.NewTokenManager(
+		cfg.JWTSecret,
+		time.Duration(cfg.JWTExpiration)*time.Second,
+		time.Duration(cfg.JWTExpiration*2)*time.Second,
+	)
+
+	// Create HTTP mux
 	mux := http.NewServeMux()
 
-	// Health check endpoint
-	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintf(w, `{"status":"ok","timestamp":"%s"}`, time.Now().UTC().Format(time.RFC3339))
-	})
+	// Initialize handlers
+	healthHandler := handler.NewHealthHandler()
 
-	// TODO: Add other routes here
-	// - Authentication endpoints
-	// - User endpoints
-	// - Post endpoints
-	// - Comment endpoints
+	// User handlers
+	userGetUC := userusecase.NewGetUserUseCase(userRepo)
+	userCreateUC := userusecase.NewCreateUserUseCase(userRepo)
+	userUpdateUC := userusecase.NewUpdateUserUseCase(userRepo)
+	userListUC := userusecase.NewListUsersUseCase(userRepo)
+	userHandler := handler.NewUserHandler(userGetUC, userCreateUC, userUpdateUC, userListUC)
+
+	// Post handlers
+	postGetUC := postusecase.NewGetPostUseCase(postRepo)
+	postCreateUC := postusecase.NewCreatePostUseCase(postRepo)
+	postDeleteUC := postusecase.NewDeletePostUseCase(postRepo)
+	postListUC := postusecase.NewListPostsUseCase(postRepo)
+	postHandler := handler.NewPostHandler(postGetUC, postCreateUC, postDeleteUC, postListUC)
+
+	// Comment handlers
+	commentAddUC := commentusecase.NewAddCommentUseCase(commentRepo, postRepo)
+	commentDeleteUC := commentusecase.NewDeleteCommentUseCase(commentRepo, postRepo)
+	commentHandler := handler.NewCommentHandlerImpl(commentAddUC, commentDeleteUC)
+
+	// Register routes
+	// Health
+	mux.HandleFunc("GET /health", healthHandler.Health)
+
+	// Users
+	mux.HandleFunc("GET /users", userHandler.ListUsers)
+	mux.HandleFunc("POST /users", middleware.AuthMiddleware(tokenManager)(
+		http.HandlerFunc(userHandler.CreateUser),
+	).ServeHTTP)
+	mux.HandleFunc("GET /users/{id}", userHandler.GetUser)
+	mux.HandleFunc("PUT /users/{id}", middleware.AuthMiddleware(tokenManager)(
+		http.HandlerFunc(userHandler.UpdateUser),
+	).ServeHTTP)
+
+	// Posts
+	mux.HandleFunc("GET /posts", postHandler.ListPosts)
+	mux.HandleFunc("POST /posts", middleware.AuthMiddleware(tokenManager)(
+		http.HandlerFunc(postHandler.CreatePost),
+	).ServeHTTP)
+	mux.HandleFunc("GET /posts/{id}", postHandler.GetPost)
+	mux.HandleFunc("DELETE /posts/{id}", middleware.AuthMiddleware(tokenManager)(
+		http.HandlerFunc(postHandler.DeletePost),
+	).ServeHTTP)
+
+	// Comments
+	mux.HandleFunc("POST /posts/{id}/comments", middleware.AuthMiddleware(tokenManager)(
+		http.HandlerFunc(commentHandler.AddComment),
+	).ServeHTTP)
+	mux.HandleFunc("DELETE /posts/{post_id}/comments/{comment_id}", middleware.AuthMiddleware(tokenManager)(
+		http.HandlerFunc(commentHandler.DeleteComment),
+	).ServeHTTP)
+
+	// Apply global middleware
+	var apiHandler http.Handler = mux
+	apiHandler = middleware.CORSMiddleware()(apiHandler)
+	apiHandler = middleware.RecoveryMiddleware(log)(apiHandler)
+	apiHandler = middleware.LoggingMiddleware(log)(apiHandler)
+	apiHandler = middleware.ContextTimeoutMiddleware(30 * time.Second)(apiHandler)
 
 	// Create HTTP server
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.ServerPort),
-		Handler:      mux,
+		Handler:      apiHandler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
