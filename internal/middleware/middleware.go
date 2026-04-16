@@ -125,13 +125,23 @@ func RecoveryMiddleware(log *logger.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// CORSMiddleware adds CORS headers
-func CORSMiddleware() func(http.Handler) http.Handler {
+// CORSMiddleware adds CORS headers based on allowed origins
+func CORSMiddleware(allowedOrigins string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
+			origin := r.Header.Get("Origin")
+
+			// Check if origin is allowed
+			if allowedOrigins == "*" {
+				w.Header().Set("Access-Control-Allow-Origin", "*")
+			} else if isOriginAllowed(origin, allowedOrigins) {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+			}
+
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			w.Header().Set("Access-Control-Max-Age", "3600")
 
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusOK)
@@ -141,6 +151,21 @@ func CORSMiddleware() func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// isOriginAllowed checks if the given origin is in the allowed origins list
+func isOriginAllowed(origin, allowedOrigins string) bool {
+	if origin == "" {
+		return false
+	}
+
+	origins := strings.Split(allowedOrigins, ",")
+	for _, allowed := range origins {
+		if strings.TrimSpace(allowed) == origin {
+			return true
+		}
+	}
+	return false
 }
 
 // writeJSONErrorResponse writes a JSON error response with appropriate status code

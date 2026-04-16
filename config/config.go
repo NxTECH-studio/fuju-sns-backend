@@ -40,29 +40,33 @@ type Config struct {
 
 	// Logging
 	LogLevel string `default:"info"`
+
+	// CORS
+	CORSAllowedOrigins string `default:"*"`
 }
 
 // Load loads configuration from environment variables
 func Load() (*Config, error) {
 	cfg := &Config{
-		ServerPort:        getEnvInt("SERVER_PORT", 8080),
-		Environment:       getEnv("ENVIRONMENT", "development"),
-		DBHost:            getEnv("DB_HOST", ""),
-		DBPort:            getEnvInt("DB_PORT", 5432),
-		DBName:            getEnv("DB_NAME", ""),
-		DBUser:            getEnv("DB_USER", ""),
-		DBPassword:        getEnv("DB_PASSWORD", ""),
-		DBMaxConn:         getEnvInt("DB_MAX_CONN", 25),
-		DBMinConn:         getEnvInt("DB_MIN_CONN", 5),
-		RedisURL:          getEnv("REDIS_URL", ""),
-		OAuthClientID:     getEnv("OAUTH_CLIENT_ID", ""),
-		OAuthClientSecret: getEnv("OAUTH_CLIENT_SECRET", ""),
-		OAuthRedirectURL:  getEnv("OAUTH_REDIRECT_URL", ""),
-		JWTSecret:         getEnv("JWT_SECRET", ""),
-		JWTExpiration:     getEnvInt("JWT_EXPIRATION", 1800),
-		SessionSecret:     getEnv("SESSION_SECRET", ""),
-		SessionDuration:   getEnvInt("SESSION_DURATION", 86400),
-		LogLevel:          getEnv("LOG_LEVEL", "info"),
+		ServerPort:         getEnvInt("SERVER_PORT", 8080),
+		Environment:        getEnv("ENVIRONMENT", "development"),
+		DBHost:             getEnv("DB_HOST", ""),
+		DBPort:             getEnvInt("DB_PORT", 5432),
+		DBName:             getEnv("DB_NAME", ""),
+		DBUser:             getEnv("DB_USER", ""),
+		DBPassword:         getEnv("DB_PASSWORD", ""),
+		DBMaxConn:          getEnvInt("DB_MAX_CONN", 25),
+		DBMinConn:          getEnvInt("DB_MIN_CONN", 5),
+		RedisURL:           getEnv("REDIS_URL", ""),
+		OAuthClientID:      getEnv("OAUTH_CLIENT_ID", ""),
+		OAuthClientSecret:  getEnv("OAUTH_CLIENT_SECRET", ""),
+		OAuthRedirectURL:   getEnv("OAUTH_REDIRECT_URL", ""),
+		JWTSecret:          getEnv("JWT_SECRET", ""),
+		JWTExpiration:      getEnvInt("JWT_EXPIRATION", 1800),
+		SessionSecret:      getEnv("SESSION_SECRET", ""),
+		SessionDuration:    getEnvInt("SESSION_DURATION", 86400),
+		LogLevel:           getEnv("LOG_LEVEL", "info"),
+		CORSAllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", "*"),
 	}
 
 	// Validate required fields

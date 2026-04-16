@@ -145,7 +145,7 @@ func main() {
 
 	// Apply global middleware
 	var apiHandler http.Handler = mux
-	apiHandler = middleware.CORSMiddleware()(apiHandler)
+	apiHandler = middleware.CORSMiddleware(cfg.CORSAllowedOrigins)(apiHandler)
 	apiHandler = middleware.RecoveryMiddleware(log)(apiHandler)
 	apiHandler = middleware.LoggingMiddleware(log)(apiHandler)
 	apiHandler = middleware.ContextTimeoutMiddleware(30 * time.Second)(apiHandler)
