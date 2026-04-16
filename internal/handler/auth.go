@@ -2,6 +2,7 @@
 package handler
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -144,101 +145,67 @@ func (h *AuthHandler) OAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 	h.log.Info(ctx, "OAuth authorization initiated", "provider", req.Provider)
 }
 
-// OAuthCallback handles OAuth provider callback
-// Supports both GET (from OAuth provider redirect) and POST (from frontend)
-func (h *AuthHandler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+// handleOAuthCallbackGET handles GET request from OAuth provider redirect
+func (h *AuthHandler) handleOAuthCallbackGET(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query()
+	code := query.Get("code")
+	state := query.Get("state")
+	returnTo := query.Get("return_to")
+	errMsg := query.Get("error")
+	errDesc := query.Get("error_description")
 
-	var code, state, returnTo string
+	if returnTo == "" {
+		returnTo = h.frontendURL
+	}
 
-	// OAuth providers redirect with GET request and query parameters
-	// Frontend can also POST with JSON body for flexibility
-	if r.Method == http.MethodGet {
-		// Parse query parameters from OAuth provider redirect
-		query := r.URL.Query()
-		code = query.Get("code")
-		state = query.Get("state")
-		returnTo = query.Get("return_to")
-
-		// Check for OAuth provider error
-		errMsg := query.Get("error")
-		errDesc := query.Get("error_description")
-		if errMsg != "" {
-			h.log.Warn(ctx, "OAuth provider returned error", "error", errMsg, "description", errDesc)
-			// Redirect to frontend with error (use return_to or frontendURL)
-			if returnTo == "" {
-				returnTo = h.frontendURL
-			}
-			errorURL := returnTo + "?error=" + url.QueryEscape(errMsg)
-			if errDesc != "" {
-				errorURL += "&error_description=" + url.QueryEscape(errDesc)
-			}
-			http.Redirect(w, r, errorURL, http.StatusFound)
-			return
+	// Handle OAuth provider error
+	if errMsg != "" {
+		h.log.Warn(ctx, "OAuth provider returned error", "error", errMsg, "description", errDesc)
+		errorURL := returnTo + "?error=" + url.QueryEscape(errMsg)
+		if errDesc != "" {
+			errorURL += "&error_description=" + url.QueryEscape(errDesc)
 		}
-
-	} else if r.Method == http.MethodPost {
-		// Handle legacy POST requests with JSON body
-		var req OAuthCallbackRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			h.log.Warn(ctx, errInvalidRequestBody, "error", err.Error())
-			WriteErrorResponse(w, errors.New(errInvalidRequestBody))
-			return
-		}
-		code = req.Code
-		state = req.State
-		// For POST, returnTo is not provided in request
-
-	} else {
-		WriteErrorResponse(w, errors.New(errMethodNotAllowed))
+		http.Redirect(w, r, errorURL, http.StatusFound)
 		return
 	}
 
 	// Validate required fields
 	if code == "" || state == "" {
-		if r.Method == http.MethodGet {
-			// Redirect to frontend with error for GET
-			if returnTo == "" {
-				returnTo = h.frontendURL
-			}
-			http.Redirect(w, r, returnTo+"?error=missing_code_or_state", http.StatusFound)
-		} else {
-			// JSON error for POST
-			WriteErrorResponse(w, errors.New(errCodeStateRequired))
-		}
+		http.Redirect(w, r, returnTo+"?error=missing_code_or_state", http.StatusFound)
 		return
 	}
 
-	// In production:
-	// 1. Validate state token for CSRF protection (compare with stored state)
-	// 2. Exchange authorization code for access token with OAuth provider
-	// 3. Fetch user info from OAuth provider
-	// 4. Create/update user in database
-	// 5. Generate JWT token
-	// 6. Redirect to frontend with token
+	// Redirect to frontend with code and state
+	redirectURL := returnTo + "?" +
+		url.Values{
+			"code":  {code},
+			"state": {state},
+		}.Encode()
+	http.Redirect(w, r, redirectURL, http.StatusFound)
+	h.log.Info(ctx, "OAuth callback redirected to frontend", "return_to", returnTo)
+}
 
-	// For GET requests: Redirect to frontend with code and state
-	if r.Method == http.MethodGet {
-		// Use return_to if provided and valid, otherwise use frontendURL
-		if returnTo == "" {
-			returnTo = h.frontendURL
-		}
-		redirectURL := returnTo + "?" +
-			url.Values{
-				"code":  {code},
-				"state": {state},
-			}.Encode()
-		http.Redirect(w, r, redirectURL, http.StatusFound)
-		h.log.Info(ctx, "OAuth callback redirected to frontend", "method", r.Method, "return_to", returnTo)
+// handleOAuthCallbackPOST handles POST request from frontend
+func (h *AuthHandler) handleOAuthCallbackPOST(ctx context.Context, w http.ResponseWriter, r *http.Request) {
+	var req OAuthCallbackRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.log.Warn(ctx, errInvalidRequestBody, "error", err.Error())
+		WriteErrorResponse(w, errors.New(errInvalidRequestBody))
 		return
 	}
 
-	// For POST requests: return success response
+	// Validate required fields
+	if req.Code == "" || req.State == "" {
+		WriteErrorResponse(w, errors.New(errCodeStateRequired))
+		return
+	}
+
+	// Return success response
 	authResp := map[string]interface{}{
 		"success": true,
 		"message": "OAuth callback received",
-		"code":    code,
-		"state":   state,
+		"code":    req.Code,
+		"state":   req.State,
 	}
 
 	w.Header().Set(headerContentType, ContentTypeJSON)
@@ -247,7 +214,22 @@ func (h *AuthHandler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 		h.log.Error(ctx, errFailedToEncodeResponse, err)
 	}
 
-	h.log.Info(ctx, "OAuth callback processed", "method", r.Method)
+	h.log.Info(ctx, "OAuth callback processed (POST)")
+}
+
+// OAuthCallback handles OAuth provider callback
+// Supports both GET (from OAuth provider redirect) and POST (from frontend)
+func (h *AuthHandler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	switch r.Method {
+	case http.MethodGet:
+		h.handleOAuthCallbackGET(ctx, w, r)
+	case http.MethodPost:
+		h.handleOAuthCallbackPOST(ctx, w, r)
+	default:
+		WriteErrorResponse(w, errors.New(errMethodNotAllowed))
+	}
 }
 
 // RefreshTokenRequest represents token refresh request
