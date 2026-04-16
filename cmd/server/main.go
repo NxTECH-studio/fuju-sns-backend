@@ -64,6 +64,9 @@ func main() {
 	// Initialize handlers
 	healthHandler := handler.NewHealthHandler()
 
+	// Auth handlers
+	authHandler := handler.NewAuthHandler(tokenManager, log)
+
 	// User handlers
 	userGetUC := userusecase.NewGetUserUseCase(userRepo)
 	userCreateUC := userusecase.NewCreateUserUseCase(userRepo)
@@ -101,6 +104,14 @@ func main() {
 	// Register routes
 	// Health
 	mux.HandleFunc("GET /health", healthHandler.Health)
+
+	// Authentication
+	mux.HandleFunc("POST /auth/oauth/authorize", authHandler.OAuthAuthorize)
+	mux.HandleFunc("POST /auth/oauth/callback", authHandler.OAuthCallback)
+	mux.HandleFunc("POST /auth/refresh", authHandler.RefreshToken)
+	mux.HandleFunc("POST /auth/logout", middleware.AuthMiddleware(tokenManager)(
+		http.HandlerFunc(authHandler.Logout),
+	).ServeHTTP)
 
 	// Users
 	mux.HandleFunc("GET /users", userHandler.ListUsers)
