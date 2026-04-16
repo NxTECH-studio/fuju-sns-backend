@@ -61,6 +61,7 @@ type OAuthAuthorizeRequest struct {
 // OAuthAuthorizeResponse represents OAuth authorization response
 type OAuthAuthorizeResponse struct {
 	RedirectURL string `json:"redirect_url"`
+	RedirectURI string `json:"redirect_uri"`
 }
 
 // OAuthCallbackRequest represents OAuth callback request
@@ -131,6 +132,7 @@ func (h *AuthHandler) OAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 
 	resp := OAuthAuthorizeResponse{
 		RedirectURL: redirectURL,
+		RedirectURI: req.RedirectURI,
 	}
 
 	w.Header().Set(headerContentType, ContentTypeJSON)
@@ -147,7 +149,7 @@ func (h *AuthHandler) OAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 func (h *AuthHandler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	var code, state string
+	var code, state, returnTo string
 
 	// OAuth providers redirect with GET request and query parameters
 	// Frontend can also POST with JSON body for flexibility
@@ -156,14 +158,18 @@ func (h *AuthHandler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 		query := r.URL.Query()
 		code = query.Get("code")
 		state = query.Get("state")
+		returnTo = query.Get("return_to")
 
 		// Check for OAuth provider error
 		errMsg := query.Get("error")
 		errDesc := query.Get("error_description")
 		if errMsg != "" {
 			h.log.Warn(ctx, "OAuth provider returned error", "error", errMsg, "description", errDesc)
-			// Redirect to frontend with error
-			errorURL := h.frontendURL + "/auth/callback?error=" + url.QueryEscape(errMsg)
+			// Redirect to frontend with error (use return_to or frontendURL)
+			if returnTo == "" {
+				returnTo = h.frontendURL
+			}
+			errorURL := returnTo + "?error=" + url.QueryEscape(errMsg)
 			if errDesc != "" {
 				errorURL += "&error_description=" + url.QueryEscape(errDesc)
 			}
@@ -181,6 +187,7 @@ func (h *AuthHandler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 		}
 		code = req.Code
 		state = req.State
+		// For POST, returnTo is not provided in request
 
 	} else {
 		WriteErrorResponse(w, errors.New(errMethodNotAllowed))
@@ -191,7 +198,10 @@ func (h *AuthHandler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 	if code == "" || state == "" {
 		if r.Method == http.MethodGet {
 			// Redirect to frontend with error for GET
-			http.Redirect(w, r, h.frontendURL+"/auth/callback?error=missing_code_or_state", http.StatusFound)
+			if returnTo == "" {
+				returnTo = h.frontendURL
+			}
+			http.Redirect(w, r, returnTo+"?error=missing_code_or_state", http.StatusFound)
 		} else {
 			// JSON error for POST
 			WriteErrorResponse(w, errors.New(errCodeStateRequired))
@@ -209,13 +219,17 @@ func (h *AuthHandler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 
 	// For GET requests: Redirect to frontend with code and state
 	if r.Method == http.MethodGet {
-		redirectURL := h.frontendURL + "/auth/callback?" +
+		// Use return_to if provided and valid, otherwise use frontendURL
+		if returnTo == "" {
+			returnTo = h.frontendURL
+		}
+		redirectURL := returnTo + "?" +
 			url.Values{
 				"code":  {code},
 				"state": {state},
 			}.Encode()
 		http.Redirect(w, r, redirectURL, http.StatusFound)
-		h.log.Info(ctx, "OAuth callback redirected to frontend", "method", r.Method)
+		h.log.Info(ctx, "OAuth callback redirected to frontend", "method", r.Method, "return_to", returnTo)
 		return
 	}
 
