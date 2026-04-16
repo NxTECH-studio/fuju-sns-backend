@@ -64,9 +64,6 @@ func main() {
 	// Initialize handlers
 	healthHandler := handler.NewHealthHandler()
 
-	// Auth handlers
-	authHandler := handler.NewAuthHandler(tokenManager, log)
-
 	// User handlers
 	userGetUC := userusecase.NewGetUserUseCase(userRepo)
 	userCreateUC := userusecase.NewCreateUserUseCase(userRepo)
@@ -85,6 +82,9 @@ func main() {
 	commentAddUC := commentusecase.NewAddCommentUseCase(commentRepo, postRepo)
 	commentDeleteUC := commentusecase.NewDeleteCommentUseCase(commentRepo, postRepo)
 	commentHandler := handler.NewCommentHandlerImpl(commentAddUC, commentDeleteUC)
+
+	// Authentication handler
+	authHandler := handler.NewAuthHandler(cfg.OAuthClientID, cfg.OAuthRedirectURL, cfg.FrontendURL, tokenManager, log)
 
 	// Image handlers
 	imageRepo := inmemory.NewImageRepository()
@@ -107,6 +107,7 @@ func main() {
 
 	// Authentication
 	mux.HandleFunc("POST /auth/oauth/authorize", authHandler.OAuthAuthorize)
+	mux.HandleFunc("GET /auth/oauth/callback", authHandler.OAuthCallback)
 	mux.HandleFunc("POST /auth/oauth/callback", authHandler.OAuthCallback)
 	mux.HandleFunc("POST /auth/refresh", authHandler.RefreshToken)
 	mux.HandleFunc("POST /auth/logout", middleware.AuthMiddleware(tokenManager)(

@@ -43,6 +43,9 @@ type Config struct {
 
 	// CORS
 	CORSAllowedOrigins string `default:"*"`
+
+	// Frontend
+	FrontendURL string `required:"true"`
 }
 
 // Load loads configuration from environment variables
@@ -67,6 +70,7 @@ func Load() (*Config, error) {
 		SessionDuration:    getEnvInt("SESSION_DURATION", 86400),
 		LogLevel:           getEnv("LOG_LEVEL", "info"),
 		CORSAllowedOrigins: getEnv("CORS_ALLOWED_ORIGINS", "*"),
+		FrontendURL:        getEnv("FRONTEND_URL", ""),
 	}
 
 	// Validate required fields

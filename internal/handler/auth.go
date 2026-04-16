@@ -2,10 +2,12 @@
 package handler
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
-	"time"
+	"net/url"
 
 	"github.com/fuju/backend/pkg/auth"
 	"github.com/fuju/backend/pkg/logger"
@@ -30,22 +32,30 @@ const (
 
 // AuthHandler handles authentication requests
 type AuthHandler struct {
-	tokenManager *auth.TokenManager
-	log          *logger.Logger
+	oauthClientID    string
+	oauthRedirectURL string
+	frontendURL      string
+	tokenManager     *auth.TokenManager
+	log              *logger.Logger
 }
 
 // NewAuthHandler creates a new auth handler
-func NewAuthHandler(tokenManager *auth.TokenManager, log *logger.Logger) *AuthHandler {
+func NewAuthHandler(oauthClientID, oauthRedirectURL, frontendURL string, tokenManager *auth.TokenManager, log *logger.Logger) *AuthHandler {
 	return &AuthHandler{
-		tokenManager: tokenManager,
-		log:          log,
+		oauthClientID:    oauthClientID,
+		oauthRedirectURL: oauthRedirectURL,
+		frontendURL:      frontendURL,
+		tokenManager:     tokenManager,
+		log:              log,
 	}
 }
 
 // OAuthAuthorizeRequest represents OAuth authorization request
 type OAuthAuthorizeRequest struct {
-	Provider    string `json:"provider"`
-	RedirectURI string `json:"redirect_uri"`
+	Provider string `json:"provider"`
+	// Note: redirect_uri is configured server-side via OAUTH_REDIRECT_URL
+	// This field is deprecated but kept for backward compatibility
+	RedirectURI string `json:"redirect_uri,omitempty"`
 }
 
 // OAuthAuthorizeResponse represents OAuth authorization response
@@ -82,11 +92,41 @@ func (h *AuthHandler) OAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Generate CSRF protection state token
+	stateToken := make([]byte, 16)
+	if _, err := rand.Read(stateToken); err != nil {
+		h.log.Error(ctx, "failed to generate state token", err)
+		WriteErrorResponse(w, errors.New("failed to generate state token"))
+		return
+	}
+	state := hex.EncodeToString(stateToken)
+
 	// Generate OAuth authorization URL based on provider
-	// In production, this would construct proper OAuth URLs with client ID, scopes, etc.
-	redirectURL := "https://accounts.google.com/o/oauth2/v2/auth?client_id=YOUR_CLIENT_ID&redirect_uri=" + req.RedirectURI
-	if req.Provider == "github" {
-		redirectURL = "https://github.com/login/oauth/authorize?client_id=YOUR_CLIENT_ID&redirect_uri=" + req.RedirectURI
+	// Use server-configured redirect_uri for security
+	var redirectURL string
+	switch req.Provider {
+	case "google":
+		params := url.Values{
+			"client_id":     {h.oauthClientID},
+			"redirect_uri":  {h.oauthRedirectURL},
+			"response_type": {"code"},
+			"scope":         {"openid email profile"},
+			"state":         {state},
+		}
+		redirectURL = "https://accounts.google.com/o/oauth2/v2/auth?" + params.Encode()
+
+	case "github":
+		params := url.Values{
+			"client_id":    {h.oauthClientID},
+			"redirect_uri": {h.oauthRedirectURL},
+			"scope":        {"user:email"},
+			"state":        {state},
+		}
+		redirectURL = "https://github.com/login/oauth/authorize?" + params.Encode()
+
+	default:
+		WriteErrorResponse(w, errors.New("unsupported provider"))
+		return
 	}
 
 	resp := OAuthAuthorizeResponse{
@@ -103,42 +143,88 @@ func (h *AuthHandler) OAuthAuthorize(w http.ResponseWriter, r *http.Request) {
 }
 
 // OAuthCallback handles OAuth provider callback
+// Supports both GET (from OAuth provider redirect) and POST (from frontend)
 func (h *AuthHandler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	if r.Method != http.MethodPost {
+	var code, state string
+
+	// OAuth providers redirect with GET request and query parameters
+	// Frontend can also POST with JSON body for flexibility
+	if r.Method == http.MethodGet {
+		// Parse query parameters from OAuth provider redirect
+		query := r.URL.Query()
+		code = query.Get("code")
+		state = query.Get("state")
+
+		// Check for OAuth provider error
+		errMsg := query.Get("error")
+		errDesc := query.Get("error_description")
+		if errMsg != "" {
+			h.log.Warn(ctx, "OAuth provider returned error", "error", errMsg, "description", errDesc)
+			// Redirect to frontend with error
+			errorURL := h.frontendURL + "/auth/callback?error=" + url.QueryEscape(errMsg)
+			if errDesc != "" {
+				errorURL += "&error_description=" + url.QueryEscape(errDesc)
+			}
+			http.Redirect(w, r, errorURL, http.StatusFound)
+			return
+		}
+
+	} else if r.Method == http.MethodPost {
+		// Handle legacy POST requests with JSON body
+		var req OAuthCallbackRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			h.log.Warn(ctx, errInvalidRequestBody, "error", err.Error())
+			WriteErrorResponse(w, errors.New(errInvalidRequestBody))
+			return
+		}
+		code = req.Code
+		state = req.State
+
+	} else {
 		WriteErrorResponse(w, errors.New(errMethodNotAllowed))
 		return
 	}
 
-	var req OAuthCallbackRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.log.Warn(ctx, errInvalidRequestBody, "error", err.Error())
-		WriteErrorResponse(w, errors.New(errInvalidRequestBody))
-		return
-	}
-
 	// Validate required fields
-	if req.Code == "" || req.State == "" {
-		WriteErrorResponse(w, errors.New(errCodeStateRequired))
+	if code == "" || state == "" {
+		if r.Method == http.MethodGet {
+			// Redirect to frontend with error for GET
+			http.Redirect(w, r, h.frontendURL+"/auth/callback?error=missing_code_or_state", http.StatusFound)
+		} else {
+			// JSON error for POST
+			WriteErrorResponse(w, errors.New(errCodeStateRequired))
+		}
 		return
 	}
 
-	if req.DeviceType == "" {
-		req.DeviceType = "web"
+	// In production:
+	// 1. Validate state token for CSRF protection (compare with stored state)
+	// 2. Exchange authorization code for access token with OAuth provider
+	// 3. Fetch user info from OAuth provider
+	// 4. Create/update user in database
+	// 5. Generate JWT token
+	// 6. Redirect to frontend with token
+
+	// For GET requests: Redirect to frontend with code and state
+	if r.Method == http.MethodGet {
+		redirectURL := h.frontendURL + "/auth/callback?" +
+			url.Values{
+				"code":  {code},
+				"state": {state},
+			}.Encode()
+		http.Redirect(w, r, redirectURL, http.StatusFound)
+		h.log.Info(ctx, "OAuth callback redirected to frontend", "method", r.Method)
+		return
 	}
 
-	// Validate state token and exchange code for access token
-	// In production: validate state for CSRF protection, exchange code with OAuth provider,
-	// fetch user info, create/update user in database, generate session or JWT token
+	// For POST requests: return success response
 	authResp := map[string]interface{}{
-		"session_id": "placeholder_session_id",
-		"user": map[string]interface{}{
-			"id":         1,
-			"username":   "testuser",
-			"email":      "test@example.com",
-			"created_at": time.Now(),
-		},
+		"success": true,
+		"message": "OAuth callback received",
+		"code":    code,
+		"state":   state,
 	}
 
 	w.Header().Set(headerContentType, ContentTypeJSON)
@@ -147,7 +233,7 @@ func (h *AuthHandler) OAuthCallback(w http.ResponseWriter, r *http.Request) {
 		h.log.Error(ctx, errFailedToEncodeResponse, err)
 	}
 
-	h.log.Info(ctx, "OAuth callback processed", "device_type", req.DeviceType)
+	h.log.Info(ctx, "OAuth callback processed", "method", r.Method)
 }
 
 // RefreshTokenRequest represents token refresh request
