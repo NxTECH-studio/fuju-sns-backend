@@ -13,6 +13,7 @@ type contextKey string
 
 const (
 	subKey         contextKey = "authcore_sub"
+	accessTokenKey contextKey = "authcore_access_token"
 	currentUserKey contextKey = "authcore_current_user"
 )
 
@@ -28,6 +29,21 @@ func GetSubFromContext(ctx context.Context) (string, bool) {
 		return "", false
 	}
 	return sub, true
+}
+
+// SetAccessTokenInContext stores the caller's AuthCore access token so later
+// stages (hydrate) can call AuthCore on the user's behalf.
+func SetAccessTokenInContext(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, accessTokenKey, token)
+}
+
+// GetAccessTokenFromContext returns the caller's AuthCore access token.
+func GetAccessTokenFromContext(ctx context.Context) (string, bool) {
+	tok, ok := ctx.Value(accessTokenKey).(string)
+	if !ok || tok == "" {
+		return "", false
+	}
+	return tok, true
 }
 
 // SetCurrentUserInContext stores the hydrated User on the context so

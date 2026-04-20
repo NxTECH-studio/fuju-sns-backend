@@ -28,9 +28,10 @@ type Config struct {
 
 	// AuthCore
 	AuthCoreBaseURL            string
-	AuthCoreServiceToken       string
-	AuthCoreSessionCookieName  string
+	AuthCoreClientID           string
+	AuthCoreClientSecret       string
 	AuthCoreIntrospectPath     string
+	AuthCoreProfilePath        string
 	AuthCoreProfileTTL         time.Duration
 	AuthCoreIntrospectCacheTTL time.Duration
 
@@ -58,9 +59,10 @@ func Load() (*Config, error) {
 		DBMinConn:                  getEnvInt("DB_MIN_CONN", 5),
 		RedisURL:                   getEnv("REDIS_URL", ""),
 		AuthCoreBaseURL:            getEnv("AUTHCORE_BASE_URL", ""),
-		AuthCoreServiceToken:       getEnv("AUTHCORE_SERVICE_TOKEN", ""),
-		AuthCoreSessionCookieName:  getEnv("AUTHCORE_SESSION_COOKIE_NAME", "authcore_session"),
-		AuthCoreIntrospectPath:     getEnv("AUTHCORE_INTROSPECT_PATH", "/internal/introspect"),
+		AuthCoreClientID:           getEnv("AUTHCORE_CLIENT_ID", ""),
+		AuthCoreClientSecret:       getEnv("AUTHCORE_CLIENT_SECRET", ""),
+		AuthCoreIntrospectPath:     getEnv("AUTHCORE_INTROSPECT_PATH", "/v1/auth/introspect"),
+		AuthCoreProfilePath:        getEnv("AUTHCORE_PROFILE_PATH", "/v1/user/profile"),
 		AuthCoreProfileTTL:         getEnvDuration("AUTHCORE_PROFILE_TTL", time.Hour),
 		AuthCoreIntrospectCacheTTL: getEnvDuration("AUTHCORE_INTROSPECT_CACHE_TTL", 30*time.Second),
 		LogLevel:                   getEnv("LOG_LEVEL", "info"),
@@ -95,8 +97,11 @@ func (c *Config) Validate() error {
 	if c.AuthCoreBaseURL == "" {
 		return fmt.Errorf("AUTHCORE_BASE_URL is required")
 	}
-	if c.AuthCoreServiceToken == "" {
-		return fmt.Errorf("AUTHCORE_SERVICE_TOKEN is required")
+	if c.AuthCoreClientID == "" {
+		return fmt.Errorf("AUTHCORE_CLIENT_ID is required")
+	}
+	if c.AuthCoreClientSecret == "" {
+		return fmt.Errorf("AUTHCORE_CLIENT_SECRET is required")
 	}
 	return nil
 }

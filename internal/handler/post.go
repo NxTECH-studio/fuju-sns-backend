@@ -54,12 +54,7 @@ func (h *PostHandler) GetPost(w http.ResponseWriter, r *http.Request) {
 
 // parsePostIDFromPath extracts and validates the ULID post ID from URL path.
 func parsePostIDFromPath(w http.ResponseWriter, r *http.Request) (string, bool) {
-	postID := r.PathValue("id")
-	if !ulidPattern.MatchString(postID) {
-		WriteErrorResponse(w, errors.InvalidRequest("invalid post ID", nil))
-		return "", false
-	}
-	return postID, true
+	return parseULIDFromPath(w, r, "id", "invalid post ID")
 }
 
 // CreatePost handles POST /posts.
@@ -117,7 +112,10 @@ func (h *PostHandler) DeletePost(w http.ResponseWriter, r *http.Request) {
 
 // ListPosts handles GET /posts.
 func (h *PostHandler) ListPosts(w http.ResponseWriter, r *http.Request) {
-	limit, offset, userSub := parseListPostsParams(r)
+	limit, offset, userSub, ok := parseListPostsParams(w, r)
+	if !ok {
+		return
+	}
 
 	posts, total, err := h.listPosts.Execute(r.Context(), userSub, limit, offset)
 	if err != nil {
@@ -136,8 +134,9 @@ func (h *PostHandler) ListPosts(w http.ResponseWriter, r *http.Request) {
 }
 
 // parseListPostsParams extracts limit, offset, and optional user_id (ULID)
-// from query parameters.
-func parseListPostsParams(r *http.Request) (int, int, *string) {
+// from query parameters. Invalid user_id values surface as 400 rather than
+// silently being ignored.
+func parseListPostsParams(w http.ResponseWriter, r *http.Request) (int, int, *string, bool) {
 	limit := 20
 	offset := 0
 	var userID *string
@@ -155,11 +154,13 @@ func parseListPostsParams(r *http.Request) (int, int, *string) {
 	}
 
 	if u := r.URL.Query().Get("user_id"); u != "" {
-		if ulidPattern.MatchString(u) {
-			val := u
-			userID = &val
+		if !ulidPattern.MatchString(u) {
+			WriteErrorResponse(w, errors.InvalidRequest("invalid user_id (expected ULID)", nil))
+			return 0, 0, nil, false
 		}
+		val := u
+		userID = &val
 	}
 
-	return limit, offset, userID
+	return limit, offset, userID, true
 }

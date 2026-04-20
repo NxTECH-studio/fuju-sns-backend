@@ -30,18 +30,18 @@ func (s *stubClient) GetProfile(_ context.Context, _ string) (*authcore.Profile,
 	return nil, nil
 }
 
-func newAuthedRequest(cookieValue string) *http.Request {
+func newBearerRequest(token string) *http.Request {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	if cookieValue != "" {
-		req.AddCookie(&http.Cookie{Name: "authcore_session", Value: cookieValue})
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	return req
 }
 
-func TestAuthMiddleware_NoCookie(t *testing.T) {
+func TestAuthMiddleware_NoHeader(t *testing.T) {
 	stub := &stubClient{session: &authcore.Session{Sub: "01HX"}}
-	mw := AuthMiddleware(stub, "")
-	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	mw := AuthMiddleware(stub)
+	next := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 		t.Error("next should not be called")
 	})
 	rec := httptest.NewRecorder()
@@ -51,14 +51,23 @@ func TestAuthMiddleware_NoCookie(t *testing.T) {
 	}
 }
 
+func TestAuthMiddleware_BadHeader(t *testing.T) {
+	stub := &stubClient{session: &authcore.Session{Sub: "01HX"}}
+	mw := AuthMiddleware(stub)
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Authorization", "Basic abc")
+	rec := httptest.NewRecorder()
+	mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", rec.Code)
+	}
+}
+
 func TestAuthMiddleware_InvalidSession(t *testing.T) {
 	stub := &stubClient{err: authcore.ErrInvalidSession}
-	mw := AuthMiddleware(stub, "")
-	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		t.Error("next should not be called")
-	})
+	mw := AuthMiddleware(stub)
 	rec := httptest.NewRecorder()
-	mw(next).ServeHTTP(rec, newAuthedRequest("bad"))
+	mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(rec, newBearerRequest("bad"))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("expected 401, got %d", rec.Code)
 	}
@@ -66,9 +75,9 @@ func TestAuthMiddleware_InvalidSession(t *testing.T) {
 
 func TestAuthMiddleware_UpstreamDown(t *testing.T) {
 	stub := &stubClient{err: authcore.ErrUpstream}
-	mw := AuthMiddleware(stub, "")
+	mw := AuthMiddleware(stub)
 	rec := httptest.NewRecorder()
-	mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(rec, newAuthedRequest("any"))
+	mw(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})).ServeHTTP(rec, newBearerRequest("any"))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("expected 503, got %d", rec.Code)
 	}
@@ -76,18 +85,26 @@ func TestAuthMiddleware_UpstreamDown(t *testing.T) {
 
 func TestAuthMiddleware_Success(t *testing.T) {
 	stub := &stubClient{session: &authcore.Session{Sub: "01HX", ExpiresAt: time.Now().Add(time.Hour)}}
-	mw := AuthMiddleware(stub, "")
-	var gotSub string
+	mw := AuthMiddleware(stub)
+	var gotSub, gotToken string
 	next := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		sub, ok := auth.GetSubFromContext(r.Context())
 		if !ok {
 			t.Error("sub not set")
 		}
 		gotSub = sub
+		tok, ok := auth.GetAccessTokenFromContext(r.Context())
+		if !ok {
+			t.Error("access token not set")
+		}
+		gotToken = tok
 	})
 	rec := httptest.NewRecorder()
-	mw(next).ServeHTTP(rec, newAuthedRequest("good"))
+	mw(next).ServeHTTP(rec, newBearerRequest("good-token"))
 	if gotSub != "01HX" {
 		t.Errorf("expected sub 01HX, got %q", gotSub)
+	}
+	if gotToken != "good-token" {
+		t.Errorf("expected access token propagated, got %q", gotToken)
 	}
 }

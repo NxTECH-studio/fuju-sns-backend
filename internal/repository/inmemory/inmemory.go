@@ -37,8 +37,10 @@ func (r *UserRepository) GetBySub(_ context.Context, sub string) (*domain.User, 
 	return &userCopy, nil
 }
 
-// Upsert inserts or updates a user. If the row already exists the stored
-// is_admin value is preserved — hydrate must not be able to demote an admin.
+// Upsert inserts or updates a user. On update, the stored values for
+// fields the caller did not populate (zero values in the input) are
+// preserved — so hydrate refreshing only *_Cached fields cannot accidentally
+// clobber is_admin, bio, banner_url, or created_at.
 func (r *UserRepository) Upsert(_ context.Context, user *domain.User) (*domain.User, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -46,10 +48,19 @@ func (r *UserRepository) Upsert(_ context.Context, user *domain.User) (*domain.U
 	now := time.Now()
 	existing, ok := r.users[user.Sub]
 	stored := *user
+
 	if ok {
+		// Preserved server-owned fields.
 		stored.IsAdmin = existing.IsAdmin
 		stored.CreatedAt = existing.CreatedAt
 		stored.DeletedAt = existing.DeletedAt
+		// Preserve SNS-owned fields when the caller did not overwrite them.
+		if stored.Bio == "" {
+			stored.Bio = existing.Bio
+		}
+		if stored.BannerURL == "" {
+			stored.BannerURL = existing.BannerURL
+		}
 	} else if stored.CreatedAt.IsZero() {
 		stored.CreatedAt = now
 	}

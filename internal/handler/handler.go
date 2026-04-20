@@ -157,12 +157,18 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 // parseSubFromPath extracts a sub (ULID) from a path variable with format
 // validation.
 func parseSubFromPath(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
-	sub := r.PathValue(name)
-	if !ulidPattern.MatchString(sub) {
-		WriteErrorResponse(w, errors.InvalidRequest("invalid sub (expected ULID)", nil))
+	return parseULIDFromPath(w, r, name, "invalid sub (expected ULID)")
+}
+
+// parseULIDFromPath extracts a ULID-typed path variable with format
+// validation, writing a 400 with the given label on failure.
+func parseULIDFromPath(w http.ResponseWriter, r *http.Request, name, errLabel string) (string, bool) {
+	value := r.PathValue(name)
+	if !ulidPattern.MatchString(value) {
+		WriteErrorResponse(w, errors.InvalidRequest(errLabel, nil))
 		return "", false
 	}
-	return sub, true
+	return value, true
 }
 
 func parseUpdateProfileRequest(w http.ResponseWriter, r *http.Request) (*domain.UpdateUserProfileRequest, bool) {
@@ -223,9 +229,7 @@ func parsePaginationParams(r *http.Request) (int, int) {
 func writeJSONResponse(w http.ResponseWriter, data interface{}, statusCode int) {
 	w.Header().Set("Content-Type", ContentTypeJSON)
 	w.WriteHeader(statusCode)
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		_ = err
-	}
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 // WriteSuccessResponse writes a successful JSON response.

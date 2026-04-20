@@ -65,23 +65,21 @@ func LoggingMiddleware(log *logger.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// AuthMiddleware validates the session cookie against AuthCore via
-// introspection and stores the resolved sub on the request context.
-// Fail-closed: a failed introspection returns 401; an upstream outage
-// returns 503.
-func AuthMiddleware(client authcore.Client, cookieName string) func(http.Handler) http.Handler {
-	if cookieName == "" {
-		cookieName = "authcore_session"
-	}
+// AuthMiddleware extracts the Bearer access token from the Authorization
+// header, introspects it via AuthCore, and stores both the resolved sub and
+// the raw access token on the context (the token is needed later to call
+// AuthCore's profile endpoint). Fail-closed: an invalid token is 401; an
+// upstream outage is 503.
+func AuthMiddleware(client authcore.Client) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			cookie, err := r.Cookie(cookieName)
-			if err != nil || cookie.Value == "" {
+			token, ok := extractBearerToken(r.Header.Get("Authorization"))
+			if !ok {
 				writeAuthError(w, http.StatusUnauthorized, errors.ErrUnauthorized, "authentication required")
 				return
 			}
 
-			session, err := client.Introspect(r.Context(), cookie.Value)
+			session, err := client.Introspect(r.Context(), token)
 			if err != nil {
 				if stderrors.Is(err, authcore.ErrInvalidSession) {
 					writeAuthError(w, http.StatusUnauthorized, errors.ErrUnauthorized, "invalid session")
@@ -92,14 +90,26 @@ func AuthMiddleware(client authcore.Client, cookieName string) func(http.Handler
 			}
 
 			ctx := auth.SetSubInContext(r.Context(), session.Sub)
+			ctx = auth.SetAccessTokenInContext(ctx, token)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
+// extractBearerToken parses an `Authorization: Bearer <token>` header.
+func extractBearerToken(header string) (string, bool) {
+	if header == "" {
+		return "", false
+	}
+	parts := strings.SplitN(header, " ", 2)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || parts[1] == "" {
+		return "", false
+	}
+	return parts[1], true
+}
+
 // HydrateUserMiddleware runs after AuthMiddleware and materialises the
-// hydrated User onto the context. Failures surface as 500 errors — at this
-// point the caller is authenticated but we could not produce a user row.
+// hydrated User onto the context.
 func HydrateUserMiddleware(uc *userusecase.GetOrHydrateUserUseCase) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -111,8 +121,7 @@ func HydrateUserMiddleware(uc *userusecase.GetOrHydrateUserUseCase) func(http.Ha
 
 			user, err := uc.Execute(r.Context(), sub)
 			if err != nil {
-				statusCode := errors.ToHTTPStatus(err)
-				writeAuthError(w, statusCode, errors.ErrInternal, "failed to load user")
+				writeHydrateError(w, err)
 				return
 			}
 
@@ -120,6 +129,16 @@ func HydrateUserMiddleware(uc *userusecase.GetOrHydrateUserUseCase) func(http.Ha
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// writeHydrateError preserves the AppError code/status instead of
+// steamrolling them into INTERNAL_ERROR.
+func writeHydrateError(w http.ResponseWriter, err error) {
+	if appErr, ok := errors.IsAppError(err); ok {
+		writeAuthError(w, appErr.StatusCode, appErr.Code, appErr.Message)
+		return
+	}
+	writeAuthError(w, http.StatusInternalServerError, errors.ErrInternal, "failed to load user")
 }
 
 // RecoveryMiddleware handles panics.
@@ -180,7 +199,7 @@ func isOriginAllowed(origin, allowedOrigins string) bool {
 	return false
 }
 
-// writeAuthError writes a JSON error response with appropriate status code.
+// writeAuthError writes a JSON error response with an appropriate status.
 func writeAuthError(w http.ResponseWriter, statusCode int, code, message string) {
 	errResp := response.ErrorResponse{
 		Code:      code,
@@ -189,9 +208,7 @@ func writeAuthError(w http.ResponseWriter, statusCode int, code, message string)
 	}
 	w.Header().Set("Content-Type", ContentTypeJSON)
 	w.WriteHeader(statusCode)
-	if err := json.NewEncoder(w).Encode(errResp); err != nil {
-		_ = err
-	}
+	_ = json.NewEncoder(w).Encode(errResp)
 }
 
 // ContextTimeoutMiddleware adds a timeout to context.

@@ -88,10 +88,5 @@ func (h *CommentHandlerImpl) DeleteComment(w http.ResponseWriter, r *http.Reques
 
 // parseCommentIDFromPath extracts and validates the ULID comment ID.
 func parseCommentIDFromPath(w http.ResponseWriter, r *http.Request) (string, bool) {
-	commentID := r.PathValue("comment_id")
-	if !ulidPattern.MatchString(commentID) {
-		WriteErrorResponse(w, errors.InvalidRequest("invalid comment ID", nil))
-		return "", false
-	}
-	return commentID, true
+	return parseULIDFromPath(w, r, "comment_id", "invalid comment ID")
 }

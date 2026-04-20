@@ -36,7 +36,8 @@ func main() {
 	}
 
 	log := logger.New(cfg.LogLevel)
-	ctx := context.Background()
+	ctx, cancelBackground := context.WithCancel(context.Background())
+	defer cancelBackground()
 
 	log.Info(ctx, "Starting FUJU Backend Server",
 		"version", Version,
@@ -52,14 +53,17 @@ func main() {
 	// AuthCore client + short-lived introspection cache.
 	authcoreClient := authcore.New(authcore.Options{
 		BaseURL:        cfg.AuthCoreBaseURL,
-		ServiceToken:   cfg.AuthCoreServiceToken,
+		ClientID:       cfg.AuthCoreClientID,
+		ClientSecret:   cfg.AuthCoreClientSecret,
 		IntrospectPath: cfg.AuthCoreIntrospectPath,
+		ProfilePath:    cfg.AuthCoreProfilePath,
 	})
 	cachedAuthCore := authcore.NewIntrospectCache(authcoreClient, cfg.AuthCoreIntrospectCacheTTL)
+	cachedAuthCore.StartJanitor(ctx, cfg.AuthCoreIntrospectCacheTTL)
 
 	// Use cases
 	userGetUC := userusecase.NewGetUserUseCase(userRepo)
-	userHydrateUC := userusecase.NewGetOrHydrateUserUseCase(userRepo, cachedAuthCore, cfg.AuthCoreProfileTTL)
+	userHydrateUC := userusecase.NewGetOrHydrateUserUseCase(userRepo, cachedAuthCore, cfg.AuthCoreProfileTTL, log)
 	userUpdateUC := userusecase.NewUpdateUserProfileUseCase(userRepo)
 	userListUC := userusecase.NewListUsersUseCase(userRepo)
 
@@ -92,9 +96,10 @@ func main() {
 		imageHandler = handler.NewImageHandler(uploadImageUC, getUserImagesUC, deleteImageUC)
 	}
 
-	// Middleware chain for authenticated routes: AuthMiddleware (introspect +
-	// set sub) followed by HydrateUserMiddleware (load/upsert user row).
-	authMW := middleware.AuthMiddleware(cachedAuthCore, cfg.AuthCoreSessionCookieName)
+	// Middleware chain for authenticated routes: AuthMiddleware (introspect
+	// Bearer token + set sub + set access token) followed by
+	// HydrateUserMiddleware (load / upsert user row).
+	authMW := middleware.AuthMiddleware(cachedAuthCore)
 	hydrateMW := middleware.HydrateUserMiddleware(userHydrateUC)
 	authed := func(next http.Handler) http.Handler {
 		return authMW(hydrateMW(next))
@@ -105,7 +110,7 @@ func main() {
 	// Health
 	mux.HandleFunc("GET /health", healthHandler.Health)
 
-	// Me: authenticated-caller's own record (lazy-created / hydrated).
+	// Me: authenticated caller's own record (lazy-created / hydrated).
 	mux.Handle("GET /me", authed(http.HandlerFunc(userHandler.Me)))
 
 	// Users
