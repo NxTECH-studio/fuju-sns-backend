@@ -3,6 +3,7 @@ package handler
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 
 	"github.com/fuju/backend/internal/domain"
@@ -10,6 +11,24 @@ import (
 	"github.com/fuju/backend/pkg/auth"
 	"github.com/fuju/backend/pkg/errors"
 )
+
+// maxAdminBodyBytes caps admin JSON body size. Admin endpoints are
+// low-volume and carry only short text / URLs — a MB is generous.
+const maxAdminBodyBytes = 1 << 20 // 1 MiB
+
+// decodeAdminBody reads r.Body with a size cap and decodes JSON into dst.
+func decodeAdminBody(w http.ResponseWriter, r *http.Request, dst interface{}) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxAdminBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		if err == io.EOF {
+			return errors.InvalidRequest("request body is required", nil)
+		}
+		return errors.InvalidRequest("invalid request body", err)
+	}
+	return nil
+}
 
 // BadgeHandler contains handlers for admin badge endpoints.
 type BadgeHandler struct {
@@ -98,8 +117,8 @@ func (h *BadgeHandler) CreateBadge(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req createBadgeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteErrorResponse(w, errors.InvalidRequest("invalid request body", err))
+	if err := decodeAdminBody(w, r, &req); err != nil {
+		WriteErrorResponse(w, err)
 		return
 	}
 
@@ -143,8 +162,8 @@ func (h *BadgeHandler) UpdateBadge(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req updateBadgeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteErrorResponse(w, errors.InvalidRequest("invalid request body", err))
+	if err := decodeAdminBody(w, r, &req); err != nil {
+		WriteErrorResponse(w, err)
 		return
 	}
 
@@ -177,8 +196,8 @@ func (h *BadgeHandler) GrantBadge(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req domain.GrantBadgeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteErrorResponse(w, errors.InvalidRequest("invalid request body", err))
+	if err := decodeAdminBody(w, r, &req); err != nil {
+		WriteErrorResponse(w, err)
 		return
 	}
 

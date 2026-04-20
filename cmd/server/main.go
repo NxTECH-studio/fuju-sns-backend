@@ -80,6 +80,7 @@ func main() {
 
 	adminChecker := adminusecase.NewChecker(userRepo)
 	badgeGetUC := badgeusecase.NewGetUserBadgesUseCase(badgeRepo)
+	badgeBatchUC := badgeusecase.NewListUserBadgesBatchUseCase(badgeRepo)
 	badgeListUC := badgeusecase.NewListBadgesUseCase(badgeRepo)
 	badgeCreateUC := badgeusecase.NewCreateBadgeUseCase(badgeRepo, adminChecker)
 	badgeUpdateUC := badgeusecase.NewUpdateBadgeUseCase(badgeRepo, adminChecker)
@@ -88,7 +89,7 @@ func main() {
 
 	// Handlers
 	healthHandler := handler.NewHealthHandler()
-	userHandler := handler.NewUserHandler(userGetUC, userUpdateUC, userListUC, userHydrateUC, badgeGetUC, badgeRepo)
+	userHandler := handler.NewUserHandler(userGetUC, userUpdateUC, userListUC, userHydrateUC, badgeGetUC, badgeBatchUC)
 	postHandler := handler.NewPostHandler(postGetUC, postCreateUC, postDeleteUC, postListUC)
 	commentHandler := handler.NewCommentHandlerImpl(commentAddUC, commentDeleteUC)
 	badgeHandler := handler.NewBadgeHandler(badgeListUC, badgeCreateUC, badgeUpdateUC, badgeGrantUC, badgeRevokeUC)

@@ -56,12 +56,13 @@ func newBadgeHandlerFixture(t *testing.T, withAdmin bool) *badgeHandlerFixture {
 	createUC := badgeusecase.NewCreateBadgeUseCase(badgeRepo, checker)
 	updateUC := badgeusecase.NewUpdateBadgeUseCase(badgeRepo, checker)
 	getUserBadges := badgeusecase.NewGetUserBadgesUseCase(badgeRepo)
+	batchUserBadges := badgeusecase.NewListUserBadgesBatchUseCase(badgeRepo)
 
 	getUserUC := userusecase.NewGetUserUseCase(userRepo)
 
 	return &badgeHandlerFixture{
 		t:            t,
-		userHandler:  NewUserHandler(getUserUC, nil, nil, nil, getUserBadges, badgeRepo),
+		userHandler:  NewUserHandler(getUserUC, nil, nil, nil, getUserBadges, batchUserBadges),
 		badgeHandler: NewBadgeHandler(listUC, createUC, updateUC, grantUC, revokeUC),
 	}
 }

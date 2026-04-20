@@ -110,7 +110,8 @@ func TestGetUserHandler(t *testing.T) {
 			getUC := userusecase.NewGetUserUseCase(repo)
 			badgeRepo := inmemory.NewBadgeRepository()
 			badgeGetUC := badgeusecase.NewGetUserBadgesUseCase(badgeRepo)
-			h := NewUserHandler(getUC, nil, nil, nil, badgeGetUC, badgeRepo)
+			badgeBatchUC := badgeusecase.NewListUserBadgesBatchUseCase(badgeRepo)
+			h := NewUserHandler(getUC, nil, nil, nil, badgeGetUC, badgeBatchUC)
 
 			req := httptest.NewRequest("GET", "/users/"+tc.sub, nil)
 			req.SetPathValue("sub", tc.sub)

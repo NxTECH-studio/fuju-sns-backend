@@ -12,6 +12,24 @@ import (
 	"github.com/oklog/ulid/v2"
 )
 
+// ensureAdmin is the shared "require admin privilege" guard used by every
+// state-mutating badge usecase. It is defense-in-depth over AdminMiddleware —
+// usecases may be reached from non-HTTP surfaces in the future, so the check
+// must not rely solely on the middleware layer.
+func ensureAdmin(ctx context.Context, checker *admin.Checker, sub string) error {
+	if sub == "" {
+		return errors.Unauthorized("authentication required")
+	}
+	ok, err := checker.IsAdmin(ctx, sub)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return errors.Forbidden("admin privilege required")
+	}
+	return nil
+}
+
 // GetUserBadgesUseCase returns the badges currently granted to a user, in
 // priority order. Expired grants are filtered by the repository.
 type GetUserBadgesUseCase struct {
@@ -36,6 +54,31 @@ func (uc *GetUserBadgesUseCase) Execute(ctx context.Context, sub string) ([]*dom
 	return badges, nil
 }
 
+// ListUserBadgesBatchUseCase returns active badges for a batch of users,
+// keyed by sub. Missing entries in the returned map mean "no active badges".
+// Enables list endpoints to embed badges without N+1.
+type ListUserBadgesBatchUseCase struct {
+	badgeRepo repository.BadgeRepository
+}
+
+// NewListUserBadgesBatchUseCase constructs a ListUserBadgesBatchUseCase.
+func NewListUserBadgesBatchUseCase(badgeRepo repository.BadgeRepository) *ListUserBadgesBatchUseCase {
+	return &ListUserBadgesBatchUseCase{badgeRepo: badgeRepo}
+}
+
+// Execute returns a map sub -> badges for every sub in subs. Empty input
+// returns an empty map (not an error).
+func (uc *ListUserBadgesBatchUseCase) Execute(ctx context.Context, subs []string) (map[string][]*domain.Badge, error) {
+	if len(subs) == 0 {
+		return map[string][]*domain.Badge{}, nil
+	}
+	out, err := uc.badgeRepo.ListByUserIDs(ctx, subs)
+	if err != nil {
+		return nil, errors.DatabaseError("failed to list user badges", err)
+	}
+	return out, nil
+}
+
 // GrantBadgeUseCase is the admin-only "attach a badge to a user" flow.
 type GrantBadgeUseCase struct {
 	badgeRepo repository.BadgeRepository
@@ -51,7 +94,7 @@ func NewGrantBadgeUseCase(badgeRepo repository.BadgeRepository, userRepo reposit
 // Execute grants req.BadgeKey to targetSub. Returns the resolved badge so the
 // caller can echo it back.
 func (uc *GrantBadgeUseCase) Execute(ctx context.Context, adminSub, targetSub string, req *domain.GrantBadgeRequest) (*domain.Badge, error) {
-	if err := uc.ensureAdmin(ctx, adminSub); err != nil {
+	if err := ensureAdmin(ctx, uc.checker, adminSub); err != nil {
 		return nil, err
 	}
 	if req == nil {
@@ -60,8 +103,8 @@ func (uc *GrantBadgeUseCase) Execute(ctx context.Context, adminSub, targetSub st
 	if targetSub == "" {
 		return nil, errors.InvalidRequest("target sub is required", nil)
 	}
-	if req.BadgeKey == "" {
-		return nil, errors.InvalidRequest("badge_key is required", nil)
+	if err := req.Validate(); err != nil {
+		return nil, errors.ValidationFailed(err.Error())
 	}
 
 	badge, err := uc.badgeRepo.GetByKey(ctx, req.BadgeKey)
@@ -86,20 +129,6 @@ func (uc *GrantBadgeUseCase) Execute(ctx context.Context, adminSub, targetSub st
 	return badge, nil
 }
 
-func (uc *GrantBadgeUseCase) ensureAdmin(ctx context.Context, sub string) error {
-	if sub == "" {
-		return errors.Unauthorized("authentication required")
-	}
-	ok, err := uc.checker.IsAdmin(ctx, sub)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return errors.Forbidden("admin privilege required")
-	}
-	return nil
-}
-
 // RevokeBadgeUseCase is the admin-only "detach a badge from a user" flow.
 // Revoking a non-existent grant is a no-op (MVP idempotent semantics).
 type RevokeBadgeUseCase struct {
@@ -114,15 +143,8 @@ func NewRevokeBadgeUseCase(badgeRepo repository.BadgeRepository, checker *admin.
 
 // Execute revokes badgeID from targetSub.
 func (uc *RevokeBadgeUseCase) Execute(ctx context.Context, adminSub, targetSub, badgeID string) error {
-	if adminSub == "" {
-		return errors.Unauthorized("authentication required")
-	}
-	ok, err := uc.checker.IsAdmin(ctx, adminSub)
-	if err != nil {
+	if err := ensureAdmin(ctx, uc.checker, adminSub); err != nil {
 		return err
-	}
-	if !ok {
-		return errors.Forbidden("admin privilege required")
 	}
 	if targetSub == "" || badgeID == "" {
 		return errors.InvalidRequest("target sub and badge id are required", nil)
@@ -165,15 +187,8 @@ func NewCreateBadgeUseCase(badgeRepo repository.BadgeRepository, checker *admin.
 
 // Execute validates, assigns a ULID, and inserts a new master badge.
 func (uc *CreateBadgeUseCase) Execute(ctx context.Context, adminSub string, badge *domain.Badge) (*domain.Badge, error) {
-	if adminSub == "" {
-		return nil, errors.Unauthorized("authentication required")
-	}
-	ok, err := uc.checker.IsAdmin(ctx, adminSub)
-	if err != nil {
+	if err := ensureAdmin(ctx, uc.checker, adminSub); err != nil {
 		return nil, err
-	}
-	if !ok {
-		return nil, errors.Forbidden("admin privilege required")
 	}
 	if badge == nil {
 		return nil, errors.InvalidRequest("request body is required", nil)
@@ -216,15 +231,8 @@ func NewUpdateBadgeUseCase(badgeRepo repository.BadgeRepository, checker *admin.
 // Execute updates the addressed badge with fields from `patch`. Unchanged
 // fields (Key) remain as stored.
 func (uc *UpdateBadgeUseCase) Execute(ctx context.Context, adminSub, badgeID string, patch *domain.Badge) (*domain.Badge, error) {
-	if adminSub == "" {
-		return nil, errors.Unauthorized("authentication required")
-	}
-	ok, err := uc.checker.IsAdmin(ctx, adminSub)
-	if err != nil {
+	if err := ensureAdmin(ctx, uc.checker, adminSub); err != nil {
 		return nil, err
-	}
-	if !ok {
-		return nil, errors.Forbidden("admin privilege required")
 	}
 	if patch == nil {
 		return nil, errors.InvalidRequest("request body is required", nil)

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/fuju/backend/internal/domain"
-	"github.com/fuju/backend/internal/repository"
 	badgeusecase "github.com/fuju/backend/internal/usecase/badge"
 	userusecase "github.com/fuju/backend/internal/usecase/user"
 	"github.com/fuju/backend/pkg/auth"
@@ -27,12 +26,12 @@ var ulidPattern = regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]{26}$`)
 
 // UserHandler contains handlers for user endpoints.
 type UserHandler struct {
-	getUser     *userusecase.GetUserUseCase
-	updateUser  *userusecase.UpdateUserProfileUseCase
-	listUsers   *userusecase.ListUsersUseCase
-	hydrateUser *userusecase.GetOrHydrateUserUseCase
-	getBadges   *badgeusecase.GetUserBadgesUseCase
-	badgeRepo   repository.BadgeRepository
+	getUser        *userusecase.GetUserUseCase
+	updateUser     *userusecase.UpdateUserProfileUseCase
+	listUsers      *userusecase.ListUsersUseCase
+	hydrateUser    *userusecase.GetOrHydrateUserUseCase
+	getBadges      *badgeusecase.GetUserBadgesUseCase
+	listBadgeBatch *badgeusecase.ListUserBadgesBatchUseCase
 }
 
 // NewUserHandler creates a new UserHandler.
@@ -42,15 +41,15 @@ func NewUserHandler(
 	listUsers *userusecase.ListUsersUseCase,
 	hydrateUser *userusecase.GetOrHydrateUserUseCase,
 	getBadges *badgeusecase.GetUserBadgesUseCase,
-	badgeRepo repository.BadgeRepository,
+	listBadgeBatch *badgeusecase.ListUserBadgesBatchUseCase,
 ) *UserHandler {
 	return &UserHandler{
-		getUser:     getUser,
-		updateUser:  updateUser,
-		listUsers:   listUsers,
-		hydrateUser: hydrateUser,
-		getBadges:   getBadges,
-		badgeRepo:   badgeRepo,
+		getUser:        getUser,
+		updateUser:     updateUser,
+		listUsers:      listUsers,
+		hydrateUser:    hydrateUser,
+		getBadges:      getBadges,
+		listBadgeBatch: listBadgeBatch,
 	}
 }
 
@@ -226,9 +225,9 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		subs[i] = u.Sub
 	}
 
-	badgesBySub, err := h.badgeRepo.ListByUserIDs(r.Context(), subs)
+	badgesBySub, err := h.listBadgeBatch.Execute(r.Context(), subs)
 	if err != nil {
-		WriteErrorResponse(w, errors.DatabaseError("failed to list badges", err))
+		WriteErrorResponse(w, err)
 		return
 	}
 
