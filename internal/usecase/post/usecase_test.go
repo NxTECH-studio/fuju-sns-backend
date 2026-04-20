@@ -60,17 +60,19 @@ func TestCreatePost_ImageOwnerCheck(t *testing.T) {
 	f := newFixture(t, nil)
 	ctx := context.Background()
 
-	// Seed an image owned by someone else.
+	// Seed an image owned by someone else. ID must be a valid ULID now
+	// that CreatePostRequest.Validate enforces the format.
+	const foreignImageID = "01HXPST000000000000000AAAA"
 	imageRepo := f.imageRepo.(interface {
 		Create(context.Context, *domain.Image) (*domain.Image, error)
 	})
-	if _, err := imageRepo.Create(ctx, &domain.Image{ID: "img-1", UserID: "other-user"}); err != nil {
+	if _, err := imageRepo.Create(ctx, &domain.Image{ID: foreignImageID, UserID: "other-user"}); err != nil {
 		t.Fatalf("seed image: %v", err)
 	}
 
 	_, err := f.create.Execute(ctx, "attacker-sub", &domain.CreatePostRequest{
 		Content:  "hello",
-		ImageIDs: []string{"img-1"},
+		ImageIDs: []string{foreignImageID},
 	})
 	if err == nil {
 		t.Fatal("expected error")

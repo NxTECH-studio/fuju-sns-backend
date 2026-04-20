@@ -2,9 +2,20 @@ package domain
 
 import (
 	"fmt"
+	"regexp"
 	"time"
 	"unicode/utf8"
 )
+
+// ulidRegexp matches a 26-char Crockford Base32 ULID. Kept here (rather
+// than reused from handler) so domain-layer validators don't depend on
+// the HTTP layer.
+var ulidRegexp = regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]{26}$`)
+
+// IsULID reports whether s is a 26-char Crockford Base32 string.
+func IsULID(s string) bool {
+	return ulidRegexp.MatchString(s)
+}
 
 // MaxContentLen is the rune-count upper bound on Post.Content. Kept in sync
 // with the CHECK constraint in migration 004 and the app-layer validator.
@@ -64,8 +75,23 @@ func (r *CreatePostRequest) Validate() error {
 	if len(r.ImageIDs) > MaxImagesPerPost {
 		return NewValidationError(fmt.Sprintf("at most %d images per post", MaxImagesPerPost))
 	}
-	if r.ParentPostID != nil && *r.ParentPostID == "" {
-		return NewValidationError("parent_post_id must be non-empty if present")
+	seen := make(map[string]struct{}, len(r.ImageIDs))
+	for _, id := range r.ImageIDs {
+		if !IsULID(id) {
+			return NewValidationError("image_ids must be ULIDs")
+		}
+		if _, dup := seen[id]; dup {
+			return NewValidationError("image_ids must be unique")
+		}
+		seen[id] = struct{}{}
+	}
+	if r.ParentPostID != nil {
+		if *r.ParentPostID == "" {
+			return NewValidationError("parent_post_id must be non-empty if present")
+		}
+		if !IsULID(*r.ParentPostID) {
+			return NewValidationError("parent_post_id must be a ULID")
+		}
 	}
 	return nil
 }

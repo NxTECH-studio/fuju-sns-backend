@@ -47,13 +47,31 @@ func TestRegex_KeywordDictionary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
-	// Keyword order in map iteration isn't deterministic — check set equality.
-	set := map[string]bool{}
-	for _, g := range got {
-		set[g] = true
+	// Deterministic order: sorted by keyword name → ["fuju", "golang"].
+	want := []string{"fuju", "golang"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("want %v got %v", want, got)
 	}
-	if !set["golang"] || !set["fuju"] {
-		t.Errorf("expected both golang and fuju in %v", got)
+}
+
+// TestRegex_KeywordDictionary_WordBoundary verifies "fuji" does NOT match
+// inside "fujitsu" — the review flagged substring matching as wrong.
+func TestRegex_KeywordDictionary_WordBoundary(t *testing.T) {
+	ex := NewRegexTagExtractor([]string{"fuji"})
+	got, err := ex.Extract(context.Background(), "I bought a fujitsu laptop")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected no match on 'fujitsu', got %v", got)
+	}
+
+	got2, err := ex.Extract(context.Background(), "climbed fuji yesterday")
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if len(got2) != 1 || got2[0] != "fuji" {
+		t.Errorf("expected [fuji], got %v", got2)
 	}
 }
 

@@ -3,6 +3,7 @@ package handler
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -23,6 +24,23 @@ const (
 
 // ulidPattern validates a ULID (26 chars of Crockford Base32).
 var ulidPattern = regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]{26}$`)
+
+// decodeJSONBody reads a JSON body with a hard size cap and returns a
+// typed AppError on malformed / empty / oversized input. Strict decoding
+// (DisallowUnknownFields) catches typos rather than silently ignoring
+// them.
+func decodeJSONBody(w http.ResponseWriter, r *http.Request, dst interface{}, maxBytes int64) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		if err == io.EOF {
+			return errors.InvalidRequest("request body is required", nil)
+		}
+		return errors.InvalidRequest("invalid request body", err)
+	}
+	return nil
+}
 
 // UserHandler contains handlers for user endpoints.
 type UserHandler struct {

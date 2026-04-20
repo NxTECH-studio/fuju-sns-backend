@@ -3,7 +3,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -12,6 +11,11 @@ import (
 	"github.com/fuju/backend/pkg/auth"
 	"github.com/fuju/backend/pkg/errors"
 )
+
+// maxPostBodyBytes caps the POST /posts JSON body. 120 runes of content
+// plus a handful of ULIDs fits in well under a kilobyte; 16 KiB is very
+// generous and still blocks abuse.
+const maxPostBodyBytes = 16 * 1024
 
 // PostHandler wires the HTTP layer onto the post use cases.
 type PostHandler struct {
@@ -258,8 +262,8 @@ func parsePostIDFromPath(w http.ResponseWriter, r *http.Request) (string, bool) 
 // parseCreatePostRequest parses and validates the create post request.
 func parseCreatePostRequest(w http.ResponseWriter, r *http.Request) (*domain.CreatePostRequest, bool) {
 	var req domain.CreatePostRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteErrorResponse(w, errors.InvalidRequest("invalid request body", err))
+	if err := decodeJSONBody(w, r, &req, maxPostBodyBytes); err != nil {
+		WriteErrorResponse(w, err)
 		return nil, false
 	}
 	return &req, true

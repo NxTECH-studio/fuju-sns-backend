@@ -35,7 +35,7 @@ CREATE INDEX IF NOT EXISTS idx_posts_id_desc         ON posts(id DESC) WHERE del
 
 -- Post <-> Image many-to-many. position is 0..3 (X parity); the unique
 -- constraint prevents duplicated slots within a post.
-CREATE TABLE post_images (
+CREATE TABLE IF NOT EXISTS post_images (
     post_id  CHAR(26) NOT NULL REFERENCES posts(id)  ON DELETE CASCADE,
     image_id CHAR(26) NOT NULL REFERENCES images(id) ON DELETE CASCADE,
     position SMALLINT NOT NULL,
@@ -47,7 +47,7 @@ CREATE INDEX idx_post_images_post_id ON post_images(post_id);
 
 -- Likes are a composite-PK table. (user_id, created_at DESC) powers the
 -- "posts I liked recently" query planned for profile screens.
-CREATE TABLE likes (
+CREATE TABLE IF NOT EXISTS likes (
     user_id    CHAR(26)    NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
     post_id    CHAR(26)    NOT NULL REFERENCES posts(id)  ON DELETE CASCADE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -58,13 +58,13 @@ CREATE INDEX idx_likes_user_id_created_at  ON likes(user_id, created_at DESC);
 
 -- Tags. Names are stored normalized (lower-cased, trimmed) so UNIQUE(name)
 -- is meaningful. Tag ingestion is handled by the TagExtractor in the app.
-CREATE TABLE tags (
+CREATE TABLE IF NOT EXISTS tags (
     id         CHAR(26)    PRIMARY KEY,
     name       VARCHAR(64) NOT NULL UNIQUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE post_tags (
+CREATE TABLE IF NOT EXISTS post_tags (
     post_id CHAR(26) NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
     tag_id  CHAR(26) NOT NULL REFERENCES tags(id)  ON DELETE CASCADE,
     PRIMARY KEY (post_id, tag_id)

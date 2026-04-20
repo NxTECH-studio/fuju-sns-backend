@@ -225,6 +225,53 @@ func (uc *DeletePostUseCase) Execute(ctx context.Context, postID, userSub string
 	return nil
 }
 
+// hydratePosts fans out image / tag / like lookups in batches (N+1
+// avoidance) and packs the results into PostDetail. Shared by every feed
+// use case (main feed, replies, follow timeline later).
+func hydratePosts(
+	ctx context.Context,
+	imageRepo repository.ImageRepository,
+	tagRepo repository.TagRepository,
+	likeRepo repository.LikeRepository,
+	posts []*domain.Post,
+	nextCursor string,
+	viewerSub *string,
+) ([]*PostDetail, string, error) {
+	if len(posts) == 0 {
+		return []*PostDetail{}, "", nil
+	}
+	ids := make([]string, len(posts))
+	for i, p := range posts {
+		ids[i] = p.ID
+	}
+	imagesByPost, err := imageRepo.ListByPostIDs(ctx, ids)
+	if err != nil {
+		return nil, "", errors.DatabaseError("failed to load images", err)
+	}
+	tagsByPost, err := tagRepo.ListByPostIDs(ctx, ids)
+	if err != nil {
+		return nil, "", errors.DatabaseError("failed to load tags", err)
+	}
+	var likedByMe map[string]bool
+	if viewerSub != nil && *viewerSub != "" {
+		likedByMe, err = likeRepo.ListLikedPostIDsByUser(ctx, *viewerSub, ids)
+		if err != nil {
+			return nil, "", errors.DatabaseError("failed to load like state", err)
+		}
+	}
+
+	out := make([]*PostDetail, len(posts))
+	for i, p := range posts {
+		out[i] = &PostDetail{
+			Post:          p,
+			Images:        imagesByPost[p.ID],
+			Tags:          tagsByPost[p.ID],
+			LikedByViewer: likedByMe[p.ID],
+		}
+	}
+	return out, nextCursor, nil
+}
+
 // ListPostsUseCase returns a cursor-paginated feed of posts. userID filters
 // to a single author; viewerSub enables per-post likedByViewer.
 type ListPostsUseCase struct {
@@ -252,7 +299,7 @@ func (uc *ListPostsUseCase) Execute(ctx context.Context, userID *string, cursor 
 	if err != nil {
 		return nil, "", errors.DatabaseError("failed to list posts", err)
 	}
-	return uc.hydrate(ctx, posts, nextCursor, viewerSub)
+	return hydratePosts(ctx, uc.imageRepo, uc.tagRepo, uc.likeRepo, posts, nextCursor, viewerSub)
 }
 
 // ListRepliesUseCase returns a cursor-paginated list of a post's replies.
@@ -283,45 +330,7 @@ func (uc *ListRepliesUseCase) Execute(ctx context.Context, postID string, cursor
 	if err != nil {
 		return nil, "", errors.DatabaseError("failed to list replies", err)
 	}
-	lister := &ListPostsUseCase{postRepo: uc.postRepo, imageRepo: uc.imageRepo, tagRepo: uc.tagRepo, likeRepo: uc.likeRepo}
-	return lister.hydrate(ctx, posts, nextCursor, viewerSub)
-}
-
-// hydrate fans out image / tag / like lookups in batches (N+1 avoidance).
-func (uc *ListPostsUseCase) hydrate(ctx context.Context, posts []*domain.Post, nextCursor string, viewerSub *string) ([]*PostDetail, string, error) {
-	if len(posts) == 0 {
-		return []*PostDetail{}, "", nil
-	}
-	ids := make([]string, len(posts))
-	for i, p := range posts {
-		ids[i] = p.ID
-	}
-	imagesByPost, err := uc.imageRepo.ListByPostIDs(ctx, ids)
-	if err != nil {
-		return nil, "", errors.DatabaseError("failed to load images", err)
-	}
-	tagsByPost, err := uc.tagRepo.ListByPostIDs(ctx, ids)
-	if err != nil {
-		return nil, "", errors.DatabaseError("failed to load tags", err)
-	}
-	var likedByMe map[string]bool
-	if viewerSub != nil && *viewerSub != "" {
-		likedByMe, err = uc.likeRepo.ListLikedPostIDsByUser(ctx, *viewerSub, ids)
-		if err != nil {
-			return nil, "", errors.DatabaseError("failed to load like state", err)
-		}
-	}
-
-	out := make([]*PostDetail, len(posts))
-	for i, p := range posts {
-		out[i] = &PostDetail{
-			Post:          p,
-			Images:        imagesByPost[p.ID],
-			Tags:          tagsByPost[p.ID],
-			LikedByViewer: likedByMe[p.ID],
-		}
-	}
-	return out, nextCursor, nil
+	return hydratePosts(ctx, uc.imageRepo, uc.tagRepo, uc.likeRepo, posts, nextCursor, viewerSub)
 }
 
 // LikePostUseCase marks a post as liked by the caller (idempotent).

@@ -228,17 +228,11 @@ func (r *PostRepository) GetByID(_ context.Context, id string) (*domain.Post, er
 	return &postCopy, nil
 }
 
-// Create stores the post and attaches images / tags via the shared LinkStore.
+// Create stores the post and attaches images / tags via the shared
+// LinkStore. Link writes happen before the post row is published so a
+// concurrent reader never sees a Post without its full link set
+// (mirrors the single-transaction contract of the SQL implementation).
 func (r *PostRepository) Create(_ context.Context, post *domain.Post, imageIDs []string, tagIDs []string) (*domain.Post, error) {
-	r.mu.Lock()
-	now := time.Now()
-	post.CreatedAt = now
-	post.UpdatedAt = now
-
-	postCopy := *post
-	r.posts[post.ID] = &postCopy
-	r.mu.Unlock()
-
 	if len(imageIDs) > 0 {
 		r.links.attachImages(post.ID, imageIDs)
 	}
@@ -246,6 +240,15 @@ func (r *PostRepository) Create(_ context.Context, post *domain.Post, imageIDs [
 		r.links.attachTags(post.ID, tagIDs)
 	}
 
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now()
+	post.CreatedAt = now
+	post.UpdatedAt = now
+
+	postCopy := *post
+	r.posts[post.ID] = &postCopy
 	out := postCopy
 	return &out, nil
 }
@@ -344,41 +347,44 @@ func paginate(posts []*domain.Post, limit int) ([]*domain.Post, string, error) {
 	return page, page[limit-1].ID, nil
 }
 
-// IncrementRepliesCount bumps a counter. No-op for missing posts.
+// IncrementRepliesCount bumps a counter. No-op for missing or
+// soft-deleted posts (matches a SQL `UPDATE ... WHERE deleted_at IS NULL`).
 func (r *PostRepository) IncrementRepliesCount(_ context.Context, postID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if p, ok := r.posts[postID]; ok {
+	if p, ok := r.posts[postID]; ok && p.DeletedAt == nil {
 		p.RepliesCount++
 	}
 	return nil
 }
 
-// DecrementRepliesCount decrements a counter, flooring at 0.
+// DecrementRepliesCount decrements a counter, flooring at 0. No-op for
+// missing or soft-deleted posts.
 func (r *PostRepository) DecrementRepliesCount(_ context.Context, postID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if p, ok := r.posts[postID]; ok && p.RepliesCount > 0 {
+	if p, ok := r.posts[postID]; ok && p.DeletedAt == nil && p.RepliesCount > 0 {
 		p.RepliesCount--
 	}
 	return nil
 }
 
-// IncrementLikesCount bumps a counter.
+// IncrementLikesCount bumps a counter. No-op for missing or soft-deleted posts.
 func (r *PostRepository) IncrementLikesCount(_ context.Context, postID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if p, ok := r.posts[postID]; ok {
+	if p, ok := r.posts[postID]; ok && p.DeletedAt == nil {
 		p.LikesCount++
 	}
 	return nil
 }
 
-// DecrementLikesCount decrements a counter, flooring at 0.
+// DecrementLikesCount decrements a counter, flooring at 0. No-op for
+// missing or soft-deleted posts.
 func (r *PostRepository) DecrementLikesCount(_ context.Context, postID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if p, ok := r.posts[postID]; ok && p.LikesCount > 0 {
+	if p, ok := r.posts[postID]; ok && p.DeletedAt == nil && p.LikesCount > 0 {
 		p.LikesCount--
 	}
 	return nil
