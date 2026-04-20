@@ -14,6 +14,8 @@ import (
 	"github.com/fuju/backend/internal/handler"
 	"github.com/fuju/backend/internal/middleware"
 	"github.com/fuju/backend/internal/repository/inmemory"
+	adminusecase "github.com/fuju/backend/internal/usecase/admin"
+	badgeusecase "github.com/fuju/backend/internal/usecase/badge"
 	commentusecase "github.com/fuju/backend/internal/usecase/comment"
 	imageusecase "github.com/fuju/backend/internal/usecase/image"
 	postusecase "github.com/fuju/backend/internal/usecase/post"
@@ -49,6 +51,7 @@ func main() {
 	userRepo := inmemory.NewUserRepository()
 	postRepo := inmemory.NewPostRepository()
 	commentRepo := inmemory.NewCommentRepository()
+	badgeRepo := inmemory.NewBadgeRepository()
 
 	// AuthCore client + short-lived introspection cache.
 	authcoreClient := authcore.New(authcore.Options{
@@ -75,11 +78,20 @@ func main() {
 	commentAddUC := commentusecase.NewAddCommentUseCase(commentRepo, postRepo)
 	commentDeleteUC := commentusecase.NewDeleteCommentUseCase(commentRepo, postRepo)
 
+	adminChecker := adminusecase.NewChecker(userRepo)
+	badgeGetUC := badgeusecase.NewGetUserBadgesUseCase(badgeRepo)
+	badgeListUC := badgeusecase.NewListBadgesUseCase(badgeRepo)
+	badgeCreateUC := badgeusecase.NewCreateBadgeUseCase(badgeRepo, adminChecker)
+	badgeUpdateUC := badgeusecase.NewUpdateBadgeUseCase(badgeRepo, adminChecker)
+	badgeGrantUC := badgeusecase.NewGrantBadgeUseCase(badgeRepo, userRepo, adminChecker)
+	badgeRevokeUC := badgeusecase.NewRevokeBadgeUseCase(badgeRepo, adminChecker)
+
 	// Handlers
 	healthHandler := handler.NewHealthHandler()
-	userHandler := handler.NewUserHandler(userGetUC, userUpdateUC, userListUC, userHydrateUC)
+	userHandler := handler.NewUserHandler(userGetUC, userUpdateUC, userListUC, userHydrateUC, badgeGetUC, badgeRepo)
 	postHandler := handler.NewPostHandler(postGetUC, postCreateUC, postDeleteUC, postListUC)
 	commentHandler := handler.NewCommentHandlerImpl(commentAddUC, commentDeleteUC)
+	badgeHandler := handler.NewBadgeHandler(badgeListUC, badgeCreateUC, badgeUpdateUC, badgeGrantUC, badgeRevokeUC)
 
 	// Optional R2 / image handlers.
 	imageRepo := inmemory.NewImageRepository()
@@ -101,8 +113,12 @@ func main() {
 	// HydrateUserMiddleware (load / upsert user row).
 	authMW := middleware.AuthMiddleware(cachedAuthCore)
 	hydrateMW := middleware.HydrateUserMiddleware(userHydrateUC)
+	adminMW := middleware.AdminMiddleware()
 	authed := func(next http.Handler) http.Handler {
 		return authMW(hydrateMW(next))
+	}
+	adminOnly := func(next http.Handler) http.Handler {
+		return authMW(hydrateMW(adminMW(next)))
 	}
 
 	mux := http.NewServeMux()
@@ -134,6 +150,13 @@ func main() {
 		mux.Handle("GET /v1/images", authed(http.HandlerFunc(imageHandler.GetUserImages)))
 		mux.Handle("DELETE /v1/images/{id}", authed(http.HandlerFunc(imageHandler.DeleteImage)))
 	}
+
+	// Admin badges
+	mux.Handle("GET /v1/admin/badges", adminOnly(http.HandlerFunc(badgeHandler.ListBadges)))
+	mux.Handle("POST /v1/admin/badges", adminOnly(http.HandlerFunc(badgeHandler.CreateBadge)))
+	mux.Handle("PUT /v1/admin/badges/{id}", adminOnly(http.HandlerFunc(badgeHandler.UpdateBadge)))
+	mux.Handle("POST /v1/admin/users/{sub}/badges", adminOnly(http.HandlerFunc(badgeHandler.GrantBadge)))
+	mux.Handle("DELETE /v1/admin/users/{sub}/badges/{badge_id}", adminOnly(http.HandlerFunc(badgeHandler.RevokeBadge)))
 
 	var apiHandler http.Handler = mux
 	apiHandler = middleware.CORSMiddleware(cfg.CORSAllowedOrigins)(apiHandler)

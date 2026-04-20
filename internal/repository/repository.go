@@ -3,6 +3,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/fuju/backend/internal/domain"
 )
@@ -53,4 +54,24 @@ type ImageRepository interface {
 	GetByUserID(ctx context.Context, userID string) ([]*domain.Image, error)
 	Create(ctx context.Context, image *domain.Image) (*domain.Image, error)
 	Delete(ctx context.Context, id string) error
+}
+
+// BadgeRepository defines badge master + user_badges persistence operations.
+// ListByUserID / ListByUserIDs return only currently-active grants
+// (expires_at IS NULL OR expires_at > NOW()).
+type BadgeRepository interface {
+	// Master table.
+	ListAll(ctx context.Context) ([]*domain.Badge, error)
+	GetByKey(ctx context.Context, key string) (*domain.Badge, error)
+	GetByID(ctx context.Context, id string) (*domain.Badge, error)
+	Create(ctx context.Context, badge *domain.Badge) (*domain.Badge, error)
+	Update(ctx context.Context, badge *domain.Badge) (*domain.Badge, error)
+
+	// User grants.
+	Grant(ctx context.Context, userID, badgeID, grantedBy string, expiresAt *time.Time, reason string) error
+	Revoke(ctx context.Context, userID, badgeID string) error
+	ListByUserID(ctx context.Context, userID string) ([]*domain.Badge, error)
+
+	// N+1 avoidance for list endpoints: one call resolves many users.
+	ListByUserIDs(ctx context.Context, userIDs []string) (map[string][]*domain.Badge, error)
 }

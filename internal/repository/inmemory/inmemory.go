@@ -3,6 +3,7 @@ package inmemory
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -387,4 +388,210 @@ func (r *ImageRepository) Delete(_ context.Context, id string) error {
 	}
 
 	return nil
+}
+
+// userBadgeKey is the composite primary key for the in-memory user_badges map.
+type userBadgeKey struct {
+	userID  string
+	badgeID string
+}
+
+// BadgeRepository is an in-memory implementation of the BadgeRepository
+// interface.
+type BadgeRepository struct {
+	mu         sync.RWMutex
+	badges     map[string]*domain.Badge // id -> badge
+	byKey      map[string]string        // key -> id
+	userBadges map[userBadgeKey]*domain.UserBadge
+}
+
+// NewBadgeRepository creates a new in-memory badge repository.
+func NewBadgeRepository() repository.BadgeRepository {
+	return &BadgeRepository{
+		badges:     make(map[string]*domain.Badge),
+		byKey:      make(map[string]string),
+		userBadges: make(map[userBadgeKey]*domain.UserBadge),
+	}
+}
+
+// ListAll returns all badge master rows ordered by priority ascending.
+func (r *BadgeRepository) ListAll(_ context.Context) ([]*domain.Badge, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	badges := make([]*domain.Badge, 0, len(r.badges))
+	for _, b := range r.badges {
+		bc := *b
+		badges = append(badges, &bc)
+	}
+	sortBadgesByPriority(badges)
+	return badges, nil
+}
+
+// GetByKey looks up a badge by its machine-readable key.
+func (r *BadgeRepository) GetByKey(_ context.Context, key string) (*domain.Badge, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	id, ok := r.byKey[key]
+	if !ok {
+		return nil, nil
+	}
+	b := *r.badges[id]
+	return &b, nil
+}
+
+// GetByID looks up a badge by ULID.
+func (r *BadgeRepository) GetByID(_ context.Context, id string) (*domain.Badge, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	b, ok := r.badges[id]
+	if !ok {
+		return nil, nil
+	}
+	bc := *b
+	return &bc, nil
+}
+
+// Create inserts a new badge master row. Caller is responsible for setting
+// badge.ID (typically a ULID). Key must be unique.
+func (r *BadgeRepository) Create(_ context.Context, badge *domain.Badge) (*domain.Badge, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if _, dup := r.byKey[badge.Key]; dup {
+		return nil, nil
+	}
+
+	now := time.Now()
+	stored := *badge
+	if stored.CreatedAt.IsZero() {
+		stored.CreatedAt = now
+	}
+	stored.UpdatedAt = now
+	r.badges[stored.ID] = &stored
+	r.byKey[stored.Key] = stored.ID
+
+	out := stored
+	return &out, nil
+}
+
+// Update replaces the mutable fields of an existing badge master row. Key
+// cannot be changed through Update — callers that need to rename a key must
+// delete + recreate.
+func (r *BadgeRepository) Update(_ context.Context, badge *domain.Badge) (*domain.Badge, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	existing, ok := r.badges[badge.ID]
+	if !ok {
+		return nil, nil
+	}
+
+	stored := *existing
+	stored.Label = badge.Label
+	stored.Description = badge.Description
+	stored.IconURL = badge.IconURL
+	stored.Color = badge.Color
+	stored.Priority = badge.Priority
+	stored.UpdatedAt = time.Now()
+
+	r.badges[stored.ID] = &stored
+	out := stored
+	return &out, nil
+}
+
+// Grant upserts a user_badges row (idempotent for MVP).
+func (r *BadgeRepository) Grant(_ context.Context, userID, badgeID, grantedBy string, expiresAt *time.Time, reason string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var expiresCopy *time.Time
+	if expiresAt != nil {
+		v := *expiresAt
+		expiresCopy = &v
+	}
+
+	r.userBadges[userBadgeKey{userID: userID, badgeID: badgeID}] = &domain.UserBadge{
+		UserID:    userID,
+		BadgeID:   badgeID,
+		GrantedAt: time.Now(),
+		GrantedBy: grantedBy,
+		ExpiresAt: expiresCopy,
+		Reason:    reason,
+	}
+	return nil
+}
+
+// Revoke removes a user_badges row. Revoking a missing grant is a no-op.
+func (r *BadgeRepository) Revoke(_ context.Context, userID, badgeID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	delete(r.userBadges, userBadgeKey{userID: userID, badgeID: badgeID})
+	return nil
+}
+
+// ListByUserID returns all currently-active badges for a user, priority asc.
+func (r *BadgeRepository) ListByUserID(_ context.Context, userID string) ([]*domain.Badge, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	now := time.Now()
+	var result []*domain.Badge
+	for k, ub := range r.userBadges {
+		if k.userID != userID {
+			continue
+		}
+		if ub.ExpiresAt != nil && !ub.ExpiresAt.After(now) {
+			continue
+		}
+		if b, ok := r.badges[k.badgeID]; ok {
+			bc := *b
+			result = append(result, &bc)
+		}
+	}
+	sortBadgesByPriority(result)
+	return result, nil
+}
+
+// ListByUserIDs batches ListByUserID across many users and returns a map
+// keyed by user ID. Users with no active badges are absent from the map.
+func (r *BadgeRepository) ListByUserIDs(_ context.Context, userIDs []string) (map[string][]*domain.Badge, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	want := make(map[string]struct{}, len(userIDs))
+	for _, id := range userIDs {
+		want[id] = struct{}{}
+	}
+
+	now := time.Now()
+	out := make(map[string][]*domain.Badge)
+	for k, ub := range r.userBadges {
+		if _, ok := want[k.userID]; !ok {
+			continue
+		}
+		if ub.ExpiresAt != nil && !ub.ExpiresAt.After(now) {
+			continue
+		}
+		if b, ok := r.badges[k.badgeID]; ok {
+			bc := *b
+			out[k.userID] = append(out[k.userID], &bc)
+		}
+	}
+	for uid := range out {
+		sortBadgesByPriority(out[uid])
+	}
+	return out, nil
+}
+
+func sortBadgesByPriority(badges []*domain.Badge) {
+	sort.SliceStable(badges, func(i, j int) bool {
+		if badges[i].Priority != badges[j].Priority {
+			return badges[i].Priority < badges[j].Priority
+		}
+		return badges[i].Key < badges[j].Key
+	})
 }

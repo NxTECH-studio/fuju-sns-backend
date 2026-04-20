@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/fuju/backend/internal/domain"
+	"github.com/fuju/backend/internal/repository"
+	badgeusecase "github.com/fuju/backend/internal/usecase/badge"
 	userusecase "github.com/fuju/backend/internal/usecase/user"
 	"github.com/fuju/backend/pkg/auth"
 	"github.com/fuju/backend/pkg/errors"
@@ -29,6 +31,8 @@ type UserHandler struct {
 	updateUser  *userusecase.UpdateUserProfileUseCase
 	listUsers   *userusecase.ListUsersUseCase
 	hydrateUser *userusecase.GetOrHydrateUserUseCase
+	getBadges   *badgeusecase.GetUserBadgesUseCase
+	badgeRepo   repository.BadgeRepository
 }
 
 // NewUserHandler creates a new UserHandler.
@@ -37,28 +41,34 @@ func NewUserHandler(
 	updateUser *userusecase.UpdateUserProfileUseCase,
 	listUsers *userusecase.ListUsersUseCase,
 	hydrateUser *userusecase.GetOrHydrateUserUseCase,
+	getBadges *badgeusecase.GetUserBadgesUseCase,
+	badgeRepo repository.BadgeRepository,
 ) *UserHandler {
 	return &UserHandler{
 		getUser:     getUser,
 		updateUser:  updateUser,
 		listUsers:   listUsers,
 		hydrateUser: hydrateUser,
+		getBadges:   getBadges,
+		badgeRepo:   badgeRepo,
 	}
 }
 
 // publicUserView strips admin-only fields from a user record for public
-// endpoints (e.g., looking up someone else's profile).
+// endpoints (e.g., looking up someone else's profile). Badges is always
+// emitted (empty slice if the user has no active badges).
 type publicUserView struct {
-	Sub                string     `json:"sub"`
-	DisplayNameCached  string     `json:"display_name"`
-	DisplayIDCached    string     `json:"display_id"`
-	IconURLCached      string     `json:"icon_url"`
-	Bio                string     `json:"bio"`
-	BannerURL          string     `json:"banner_url"`
-	CreatedAt          time.Time  `json:"created_at"`
-	UpdatedAt          time.Time  `json:"updated_at"`
-	DeletedAt          *time.Time `json:"deleted_at,omitempty"`
-	ProfileRefreshedAt time.Time  `json:"profile_refreshed_at"`
+	Sub                string      `json:"sub"`
+	DisplayNameCached  string      `json:"display_name"`
+	DisplayIDCached    string      `json:"display_id"`
+	IconURLCached      string      `json:"icon_url"`
+	Bio                string      `json:"bio"`
+	BannerURL          string      `json:"banner_url"`
+	Badges             []badgeView `json:"badges"`
+	CreatedAt          time.Time   `json:"created_at"`
+	UpdatedAt          time.Time   `json:"updated_at"`
+	DeletedAt          *time.Time  `json:"deleted_at,omitempty"`
+	ProfileRefreshedAt time.Time   `json:"profile_refreshed_at"`
 }
 
 // selfUserView is the view returned for the caller's own identity (/me,
@@ -68,7 +78,11 @@ type selfUserView struct {
 	IsAdmin bool `json:"is_admin"`
 }
 
-func toPublicView(u *domain.User) publicUserView {
+func toPublicView(u *domain.User, badges []*domain.Badge) publicUserView {
+	views := toBadgeViews(badges)
+	if views == nil {
+		views = []badgeView{}
+	}
 	return publicUserView{
 		Sub:                u.Sub,
 		DisplayNameCached:  u.DisplayNameCached,
@@ -76,6 +90,7 @@ func toPublicView(u *domain.User) publicUserView {
 		IconURLCached:      u.IconURLCached,
 		Bio:                u.Bio,
 		BannerURL:          u.BannerURL,
+		Badges:             views,
 		CreatedAt:          u.CreatedAt,
 		UpdatedAt:          u.UpdatedAt,
 		DeletedAt:          u.DeletedAt,
@@ -83,8 +98,8 @@ func toPublicView(u *domain.User) publicUserView {
 	}
 }
 
-func toSelfView(u *domain.User) selfUserView {
-	return selfUserView{publicUserView: toPublicView(u), IsAdmin: u.IsAdmin}
+func toSelfView(u *domain.User, badges []*domain.Badge) selfUserView {
+	return selfUserView{publicUserView: toPublicView(u, badges), IsAdmin: u.IsAdmin}
 }
 
 // GetUser handles GET /users/{sub}.
@@ -100,30 +115,40 @@ func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	WriteSuccessResponse(w, toPublicView(user), http.StatusOK)
-}
-
-// Me handles GET /me — returns the authenticated user's full (self) view.
-// Requires AuthMiddleware to have populated the sub on the context.
-func (h *UserHandler) Me(w http.ResponseWriter, r *http.Request) {
-	if user, ok := auth.GetCurrentUserFromContext(r.Context()); ok {
-		WriteSuccessResponse(w, toSelfView(user), http.StatusOK)
-		return
-	}
-
-	sub, ok := auth.GetSubFromContext(r.Context())
-	if !ok {
-		WriteErrorResponse(w, errors.Unauthorized("authentication required"))
-		return
-	}
-
-	user, err := h.hydrateUser.Execute(r.Context(), sub)
+	badges, err := h.getBadges.Execute(r.Context(), sub)
 	if err != nil {
 		WriteErrorResponse(w, err)
 		return
 	}
 
-	WriteSuccessResponse(w, toSelfView(user), http.StatusOK)
+	WriteSuccessResponse(w, toPublicView(user, badges), http.StatusOK)
+}
+
+// Me handles GET /me — returns the authenticated user's full (self) view.
+// Requires AuthMiddleware to have populated the sub on the context.
+func (h *UserHandler) Me(w http.ResponseWriter, r *http.Request) {
+	user, ok := auth.GetCurrentUserFromContext(r.Context())
+	if !ok {
+		sub, ok := auth.GetSubFromContext(r.Context())
+		if !ok {
+			WriteErrorResponse(w, errors.Unauthorized("authentication required"))
+			return
+		}
+		hydrated, err := h.hydrateUser.Execute(r.Context(), sub)
+		if err != nil {
+			WriteErrorResponse(w, err)
+			return
+		}
+		user = hydrated
+	}
+
+	badges, err := h.getBadges.Execute(r.Context(), user.Sub)
+	if err != nil {
+		WriteErrorResponse(w, err)
+		return
+	}
+
+	WriteSuccessResponse(w, toSelfView(user, badges), http.StatusOK)
 }
 
 // UpdateUser handles PUT /users/{sub} — only the authenticated user can
@@ -151,7 +176,13 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	WriteSuccessResponse(w, toSelfView(user), http.StatusOK)
+	badges, err := h.getBadges.Execute(r.Context(), user.Sub)
+	if err != nil {
+		WriteErrorResponse(w, err)
+		return
+	}
+
+	WriteSuccessResponse(w, toSelfView(user, badges), http.StatusOK)
 }
 
 // parseSubFromPath extracts a sub (ULID) from a path variable with format
@@ -190,9 +221,20 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	subs := make([]string, len(users))
+	for i, u := range users {
+		subs[i] = u.Sub
+	}
+
+	badgesBySub, err := h.badgeRepo.ListByUserIDs(r.Context(), subs)
+	if err != nil {
+		WriteErrorResponse(w, errors.DatabaseError("failed to list badges", err))
+		return
+	}
+
 	views := make([]publicUserView, len(users))
 	for i, u := range users {
-		views[i] = toPublicView(u)
+		views[i] = toPublicView(u, badgesBySub[u.Sub])
 	}
 
 	resp := response.ListResponse{
