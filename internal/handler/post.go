@@ -13,7 +13,7 @@ import (
 	"github.com/fuju/backend/pkg/response"
 )
 
-// PostHandler contains handlers for post endpoints
+// PostHandler contains handlers for post endpoints.
 type PostHandler struct {
 	getPost    *postusecase.GetPostUseCase
 	createPost *postusecase.CreatePostUseCase
@@ -21,7 +21,7 @@ type PostHandler struct {
 	listPosts  *postusecase.ListPostsUseCase
 }
 
-// NewPostHandler creates a new PostHandler
+// NewPostHandler creates a new PostHandler.
 func NewPostHandler(
 	getPost *postusecase.GetPostUseCase,
 	createPost *postusecase.CreatePostUseCase,
@@ -36,7 +36,7 @@ func NewPostHandler(
 	}
 }
 
-// GetPost handles GET /posts/{id}
+// GetPost handles GET /posts/{id}.
 func (h *PostHandler) GetPost(w http.ResponseWriter, r *http.Request) {
 	postID, ok := parsePostIDFromPath(w, r)
 	if !ok {
@@ -52,20 +52,19 @@ func (h *PostHandler) GetPost(w http.ResponseWriter, r *http.Request) {
 	WriteSuccessResponse(w, post, http.StatusOK)
 }
 
-// parsePostIDFromPath extracts and parses the post ID from URL path
-func parsePostIDFromPath(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	postIDStr := r.PathValue("id")
-	postID, err := strconv.ParseInt(postIDStr, 10, 64)
-	if err != nil {
-		WriteErrorResponse(w, errors.InvalidRequest("invalid post ID", err))
-		return 0, false
+// parsePostIDFromPath extracts and validates the ULID post ID from URL path.
+func parsePostIDFromPath(w http.ResponseWriter, r *http.Request) (string, bool) {
+	postID := r.PathValue("id")
+	if !ulidPattern.MatchString(postID) {
+		WriteErrorResponse(w, errors.InvalidRequest("invalid post ID", nil))
+		return "", false
 	}
 	return postID, true
 }
 
-// CreatePost handles POST /posts
+// CreatePost handles POST /posts.
 func (h *PostHandler) CreatePost(w http.ResponseWriter, r *http.Request) {
-	userID, ok := auth.GetUserIDFromContext(r.Context())
+	sub, ok := auth.GetSubFromContext(r.Context())
 	if !ok {
 		WriteErrorResponse(w, errors.Unauthorized("authentication required"))
 		return
@@ -76,7 +75,7 @@ func (h *PostHandler) CreatePost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	post, err := h.createPost.Execute(r.Context(), userID, req)
+	post, err := h.createPost.Execute(r.Context(), sub, req)
 	if err != nil {
 		WriteErrorResponse(w, err)
 		return
@@ -85,7 +84,7 @@ func (h *PostHandler) CreatePost(w http.ResponseWriter, r *http.Request) {
 	WriteSuccessResponse(w, post, http.StatusCreated)
 }
 
-// parseCreatePostRequest parses and validates the create post request
+// parseCreatePostRequest parses and validates the create post request.
 func parseCreatePostRequest(w http.ResponseWriter, r *http.Request) (*domain.CreatePostRequest, bool) {
 	var req domain.CreatePostRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -95,20 +94,20 @@ func parseCreatePostRequest(w http.ResponseWriter, r *http.Request) (*domain.Cre
 	return &req, true
 }
 
-// DeletePost handles DELETE /posts/{id}
+// DeletePost handles DELETE /posts/{id}.
 func (h *PostHandler) DeletePost(w http.ResponseWriter, r *http.Request) {
 	postID, ok := parsePostIDFromPath(w, r)
 	if !ok {
 		return
 	}
 
-	userID, ok := auth.GetUserIDFromContext(r.Context())
+	sub, ok := auth.GetSubFromContext(r.Context())
 	if !ok {
 		WriteErrorResponse(w, errors.Unauthorized("authentication required"))
 		return
 	}
 
-	if err := h.deletePost.Execute(r.Context(), postID, userID); err != nil {
+	if err := h.deletePost.Execute(r.Context(), postID, sub); err != nil {
 		WriteErrorResponse(w, err)
 		return
 	}
@@ -116,11 +115,11 @@ func (h *PostHandler) DeletePost(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// ListPosts handles GET /posts
+// ListPosts handles GET /posts.
 func (h *PostHandler) ListPosts(w http.ResponseWriter, r *http.Request) {
-	limit, offset, userID := parseListPostsParams(r)
+	limit, offset, userSub := parseListPostsParams(r)
 
-	posts, total, err := h.listPosts.Execute(r.Context(), userID, limit, offset)
+	posts, total, err := h.listPosts.Execute(r.Context(), userSub, limit, offset)
 	if err != nil {
 		WriteErrorResponse(w, err)
 		return
@@ -136,11 +135,12 @@ func (h *PostHandler) ListPosts(w http.ResponseWriter, r *http.Request) {
 	WriteListResponse(w, &resp, http.StatusOK)
 }
 
-// parseListPostsParams extracts limit, offset, and optional user_id from query parameters
-func parseListPostsParams(r *http.Request) (int, int, *int64) {
+// parseListPostsParams extracts limit, offset, and optional user_id (ULID)
+// from query parameters.
+func parseListPostsParams(r *http.Request) (int, int, *string) {
 	limit := 20
 	offset := 0
-	var userID *int64
+	var userID *string
 
 	if l := r.URL.Query().Get("limit"); l != "" {
 		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
@@ -155,8 +155,9 @@ func parseListPostsParams(r *http.Request) (int, int, *int64) {
 	}
 
 	if u := r.URL.Query().Get("user_id"); u != "" {
-		if parsed, err := strconv.ParseInt(u, 10, 64); err == nil {
-			userID = &parsed
+		if ulidPattern.MatchString(u) {
+			val := u
+			userID = &val
 		}
 	}
 

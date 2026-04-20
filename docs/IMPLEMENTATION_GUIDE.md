@@ -11,7 +11,7 @@
 2. [アーキテクチャ](#アーキテクチャ)
 3. [環境構成](#環境構成)
 4. [認証とセッション管理](#認証とセッション管理)
-5. [API エンドポイント仕様](#apiエンドポイント仕様)
+5. [API エンドポイント仕様](#api-エンドポイント仕様)
 6. [ミドルウェア](#ミドルウェア)
 7. [データモデル](#データモデル)
 8. [エラーハンドリング](#エラーハンドリング)
@@ -26,11 +26,10 @@
 
 FUJUは、ソーシャルメディアプラットフォーム向けのバックエンドアプリケーションです。Goで実装され、以下の主要機能を提供します：
 
-- **ユーザー管理**: ユーザー登録、プロフィール管理
+- **ユーザー管理**: AuthCore と同期した鏡像プロフィール + SNS 固有属性（Bio/Banner）
 - **投稿機能**: 投稿の作成、読取、削除
-- **コメント機能**: 投稿へのコメント追加/削除
-- **画像管理**: Cloudflare R2へのアップロード
-- **認証**: OAuth2（Google、GitHub）サポート、JWT トークンベースの認証
+- **画像管理**: Cloudflare R2 へのアップロード
+- **認証**: AuthCore Introspection（外部認証基盤へ委譲）
 - **CORS サポート**: フロントエンドとの通信を許可
 
 ### 主要な技術スタック
@@ -39,10 +38,10 @@ FUJUは、ソーシャルメディアプラットフォーム向けのバック�
 |---|---|---|
 | **言語** | Go | 1.24 |
 | **データベース** | PostgreSQL | 16-Alpine |
-| **キャッシュ/セッション** | Redis | 7-Alpine |
+| **キャッシュ** | Redis | 7-Alpine |
 | **コンテナ化** | Docker Compose | 3.8 |
 | **ロギング** | structured logging | - |
-| **認証** | JWT + OAuth2 | - |
+| **認証** | AuthCore Introspection | - |
 | **ストレージ** | Cloudflare R2 | - |
 
 ---
@@ -57,7 +56,7 @@ FUJUは、ソーシャルメディアプラットフォーム向けのバック�
 │              http://localhost:5173                       │
 └─────────────────────────────────────────────────────────┘
                           │
-                 OAuth Redirect Flow
+                 AuthCore session cookie
                           │
 ┌─────────────────────────────────────────────────────────┐
 │                Backend API Server                        │
@@ -65,17 +64,17 @@ FUJUは、ソーシャルメディアプラットフォーム向けのバック�
 ├─────────────────────────────────────────────────────────┤
 │  HTTP Router (Go 1.24)                                   │
 │  ├── /health                                             │
-│  ├── /auth/oauth/*                                       │
+│  ├── /me                                                 │
 │  ├── /users/*                                            │
 │  ├── /posts/*                                            │
 │  └── /v1/images/*                                        │
 └─────────────────────────────────────────────────────────┘
-          │              │              │
-          ▼              ▼              ▼
-    ┌─────────────┬─────────────┬─────────────┐
-    │ PostgreSQL  │    Redis    │ Cloudflare  │
-    │ (Port 5432) │ (Port 6379) │   R2 API    │
-    └─────────────┴─────────────┴─────────────┘
+          │           │           │              │
+          ▼           ▼           ▼              ▼
+    ┌───────────┬───────────┬─────────────┬─────────────┐
+    │PostgreSQL │   Redis   │  AuthCore   │ Cloudflare  │
+    │(Port 5432)│(Port 6379)│(introspect) │   R2 API    │
+    └───────────┴───────────┴─────────────┴─────────────┘
 ```
 
 ### レイヤー構造
@@ -83,17 +82,16 @@ FUJUは、ソーシャルメディアプラットフォーム向けのバック�
 ```
 ┌─────────────────────────────────────────┐
 │         HTTP Handler Layer              │
-│  ├── auth.go                            │
 │  ├── user.go                            │
 │  ├── post.go                            │
-│  ├── comment.go                         │
 │  └── image.go                           │
 └─────────────────────────────────────────┘
             ↓
 ┌─────────────────────────────────────────┐
 │   Middleware Layer                      │
 │  ├── CORS Middleware                    │
-│  ├── Authentication Middleware          │
+│  ├── Auth Middleware (AuthCore)         │
+│  ├── Hydrate User Middleware            │
 │  ├── Logging Middleware                 │
 │  └── Recovery Middleware                │
 └─────────────────────────────────────────┘
@@ -102,7 +100,6 @@ FUJUは、ソーシャルメディアプラットフォーム向けのバック�
 │   Use Case Layer (Business Logic)       │
 │  ├── user/usecase.go                    │
 │  ├── post/usecase.go                    │
-│  ├── comment/usecase.go                 │
 │  └── image/usecase.go                   │
 └─────────────────────────────────────────┘
             ↓
@@ -116,8 +113,12 @@ FUJUは、ソーシャルメディアプラットフォーム向けのバック�
 │   Domain Layer (Entities)               │
 │  ├── user.go                            │
 │  ├── post.go                            │
-│  ├── comment.go                         │
 │  └── image.go                           │
+└─────────────────────────────────────────┘
+            ↓
+┌─────────────────────────────────────────┐
+│   External Clients                      │
+│  └── pkg/authcore (Introspect / Profile)│
 └─────────────────────────────────────────┘
 ```
 
@@ -157,9 +158,9 @@ healthcheck: pg_isready (10秒間隔)
 3. ユーザー、テーブルが自動作成
 
 **主要テーブル**:
-- `users` - ユーザー情報
+- `users` - AuthCore 鏡像 + SNS 固有プロフィール（Bio/Banner、`is_admin`）
 - `posts` - 投稿
-- `comments` - コメント
+- `comments` - 暫定（post 機能タスクで post reply に統合され削除予定）
 - `images` - 画像メタデータ
 
 #### 3. Redis Service (`fuju-redis`)
@@ -174,9 +175,8 @@ healthcheck: PING command (10秒間隔)
 ```
 
 **用途**:
-- セッションストア
-- キャッシング
-- 将来: リアルタイム通知
+- アプリ内キャッシング
+- 将来: リアルタイム通知、AuthCore Introspection キャッシュの外部化
 
 #### 4. Adminer Service (`fuju-adminer`)
 
@@ -216,157 +216,73 @@ docker compose down -v
 
 ## 認証とセッション管理
 
-### OAuth2 フロー
+認証の真実源は外部の AuthCore サービス。SNS バックエンドは毎リクエスト、
+AuthCore の introspection エンドポイントに Cookie を渡して `sub`（ULID）
+を解決する。ここでは credential 発行・保管・失効を一切行わない。
 
-#### 1. 認可要求フェーズ
+### AuthCore Introspection フロー
 
-**エンドポイント**: `POST /auth/oauth/authorize`
-
-**リクエスト**:
-```json
-{
-  "provider": "google",  // or "github"
-  "redirect_uri": "http://localhost:8080/auth/oauth/callback"  // オプション
-}
+```
+[Browser]                           [SNS Backend]                    [AuthCore]
+   │ Cookie: authcore_session=...       │                                │
+   │───────────────────────────────────▶│                                │
+   │                                    │ 1. AuthMiddleware              │
+   │                                    │    Cookie を取得               │
+   │                                    │    30s キャッシュを参照        │
+   │                                    │    ↓ (miss 時)                 │
+   │                                    │ POST /internal/introspect      │
+   │                                    │ Authorization: Bearer <svc>    │
+   │                                    │───────────────────────────────▶│
+   │                                    │                                │
+   │                                    │   { sub, expires_at }          │
+   │                                    │◀───────────────────────────────│
+   │                                    │ 2. ctx に sub をセット         │
+   │                                    │                                │
+   │                                    │ 3. HydrateUserMiddleware       │
+   │                                    │    users 行を取得              │
+   │                                    │    - 行が無い: GetProfile      │
+   │                                    │      して lazy-create          │
+   │                                    │    - profile_refreshed_at が   │
+   │                                    │      1h 超: GetProfile して    │
+   │                                    │      *_cached を更新           │
+   │                                    │    - それ以外: そのまま使う    │
+   │                                    │                                │
+   │                                    │ 4. ctx に *domain.User をセット│
+   │                                    │                                │
+   │                                    │ 5. handler 実行                │
+   │     response                       │                                │
+   │◀───────────────────────────────────│                                │
 ```
 
-**処理フロー**:
-1. Provider を検証
-2. 16 バイトのランダム CSRF 保護トークン生成（hex エンコード）
-3. OAuth URL を構築:
-   ```
-   https://accounts.google.com/o/oauth2/v2/auth?
-     client_id={CLIENT_ID}
-     &redirect_uri=http://localhost:8080/auth/oauth/callback
-     &response_type=code
-     &scope=openid+email+profile
-     &state={STATE_TOKEN}
-   ```
-4. リダイレクト URL を レスポンス
+### 二層構造
 
-**レスポンス**:
-```json
-{
-  "redirect_url": "https://accounts.google.com/o/oauth2/v2/auth?...",
-  "redirect_uri": "http://localhost:8080/auth/oauth/callback"
-}
-```
+| 層 | 目的 | 頻度 | TTL |
+|---|---|---|---|
+| Introspection | Cookie が有効か / sub は誰か | 毎リクエスト | **30 秒**（in-memory キャッシュ） |
+| Profile Hydration | DisplayName / DisplayID / IconURL の取得 | users 行の lazy create 時 または 1h 経過後 | **1 時間**（`profile_refreshed_at` で管理） |
 
-#### 2. コールバック処理フェーズ
+Introspection は **fail-closed**。AuthCore が不達なら 503、AuthCore が 401/403 を返したら 401。
+Profile Hydration は **fail-open**。失敗時は既存の `*_cached` をそのまま返し、
+`profile_refreshed_at` は更新しない（次回リクエストで再試行）。
 
-**エンドポイント**:
-- `GET /auth/oauth/callback` - OAuth プロバイダーからのリダイレクト
-- `POST /auth/oauth/callback` - フロントエンドからの直接送信（レガシー）
+### AuthCore クライアント
 
-**GET 処理（プロバイダーリダイレクト）**:
+- `pkg/authcore.Client` インターフェース
+  - `Introspect(ctx, sessionToken) (*Session, error)`
+  - `GetProfile(ctx, sub) (*Profile, error)`
+- `pkg/authcore.HTTPClient` が具象実装（`net/http`）
+- `pkg/authcore.IntrospectCache` が上記を 30s TTL でラップ
+- エラー区別: `ErrInvalidSession`（401 扱い） / `ErrUpstream`（503 扱い） / `ErrNotFound`
 
-クエリパラメータ:
-```
-code: OAuth プロバイダーから取得
-state: CSRF トークン（検証用）
-```
+### Cookie 仕様
 
-処理フロー:
-1. `code` と `state` を検証
-2. `return_to` パラメータからリダイレクト先 URL を取得（未指定時は`FRONTEND_URL`）
-3. フロントエンドへリダイレクト:
-   ```
-   http://localhost:5173/?code=4/0Aci98E--...&state=508f4e9f...
-   ```
+AuthCore 側で発行される不透明（opaque）セッショントークン。
+SNS バックエンドは Cookie 名 (`AUTHCORE_SESSION_COOKIE_NAME`, default
+`authcore_session`) を設定経由で指定して読むだけで、値の生成・回転・破棄には関与しない。
 
-**POST 処理（レガシー対応）**:
+### ログアウト
 
-リクエスト:
-```json
-{
-  "code": "4/0Aci98E--LlB8rdAuUbw9oh5m0I6Da4keyz9lvGShY3BgSaLlwxFRiv1ItoXZoiY8PoXtiw",
-  "state": "508f4e9fbbdbf7df62e1d3333d45bc6f",
-  "device_type": "web"  // オプション
-}
-```
-
-レスポンス:
-```json
-{
-  "success": true,
-  "code": "4/0Aci98E--LlB8rdAuUbw9oh5m0I6Da4keyz9lvGShY3BgSaLlwxFRiv1ItoXZoiY8PoXtiw",
-  "state": "508f4e9fbbdbf7df62e1d3333d45bc6f"
-}
-```
-
-### JWT トークン管理
-
-#### トークン生成
-
-**エンドポイント**: `/auth/oauth/callback` または フロントエンド側で処理
-
-**トークンペイロード**:
-```json
-{
-  "user_id": 123,
-  "email": "user@example.com",
-  "exp": 1713298800,  // 現在 + 1800秒（30分）
-  "iat": 1713296800
-}
-```
-
-**トークン仕様**:
-- **署名アルゴリズム**: HS256
-- **秘密鍵**: `JWT_SECRET` 環境変数
-- **有効期限**: デフォルト 1800 秒（30分）*設定可能*
-- **リフレッシュトークン有効期限**: 3600 秒（60分）
-
-#### トークン検証プロセス
-
-1. Authorization ヘッダーから取得: `Bearer {token}`
-2. 署名を検証
-3. 有効期限をチェック
-4. ペイロードから `user_id` を抽出
-
-#### リフレッシュトークンエンドポイント
-
-**エンドポイント**: `POST /auth/refresh`
-
-**リクエスト**:
-```json
-{
-  "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-}
-```
-
-**処理フロー**:
-1. リフレッシュトークン検証
-2. 新しいアクセストークン生成
-3. 新しいリフレッシュトークン生成
-
-**レスポンス**:
-```json
-{
-  "access_token": "new_jwt_token",
-  "refresh_token": "new_refresh_token",
-  "expires_in": 1800
-}
-```
-
-#### ログアウト
-
-**エンドポイント**: `POST /auth/logout`
-
-**前提条件**: 認証済み（Authorization ヘッダー必須）
-
-**処理フロー**:
-1. セッションクッキーをクリア
-2. Cookie 属性:
-   - `HttpOnly`: XSS 攻撃対策
-   - `Secure`: HTTPS のみ
-   - `SameSite=Strict`: CSRF 攻撃対策
-
-**レスポンス**:
-```json
-{
-  "message": "success"
-}
-```
+AuthCore 側のエンドポイントで行う。SNS バックエンドは専用ルートを持たない。
 
 ---
 
@@ -391,142 +307,35 @@ state: CSRF トークン（検証用）
 
 ---
 
-### 2. 認証エンドポイント
+### 2. 自分自身エンドポイント
 
-#### `POST /auth/oauth/authorize`
+#### `GET /me`
 
-OAuth 認可 URL を生成
+認証済みユーザー自身のレコードを返す。行が無ければ lazy-create され、
+`*_cached` フィールドは AuthCore から 1h TTL でハイドレートされる。
 
-**認証**: 不要
-
-**リクエストボディ**:
-```json
-{
-  "provider": "google",  // "google" または "github"
-  "redirect_uri": "http://localhost:8080/auth/oauth/callback"  // オプション
-}
-```
+**認証**: 必須（AuthCore セッション Cookie）
 
 **レスポンス** (200 OK):
 ```json
 {
-  "redirect_url": "https://accounts.google.com/o/oauth2/v2/auth?...",
-  "redirect_uri": "http://localhost:8080/auth/oauth/callback"
+  "sub": "01HX4Y6Q9M8T3F2B1C0D7R5A9K",
+  "display_name": "John Doe",
+  "display_id": "john_doe",
+  "icon_url": "https://example.com/icon.jpg",
+  "bio": "Software Engineer",
+  "banner_url": "https://example.com/banner.jpg",
+  "is_admin": false,
+  "created_at": "2026-04-16T10:00:00Z",
+  "updated_at": "2026-04-16T10:00:00Z"
 }
 ```
 
 **エラー**:
 | ステータス | 説明 |
 |---|---|
-| 400 Bad Request | 無効なリクエストボディ |
-| 400 Bad Request | `provider` が必須 |
-| 500 Internal Server Error | State トークン生成失敗 |
-
----
-
-#### `GET /auth/oauth/callback`
-
-OAuth プロバイダーからのリダイレクト先
-
-**認証**: 不要
-
-**クエリパラメータ**:
-```
-code: OAuth プロバイダーから取得したコード
-state: CSRF 保護トークン
-return_to: (オプション) リダイレクト先 URL
-```
-
-**処理**:
-フロントエンドへリダイレクト（302 Found）:
-```
-Location: http://localhost:5173/?code={code}&state={state}
-```
-
-**エラー**:
-- `code` / `state` 欠落時: `?error=code_and_state_are_required`
-- State トークン不一致時: `?error=state_mismatch`
-
----
-
-#### `POST /auth/oauth/callback`
-
-OAuth コールバック（レガシー JSON レスポンス）
-
-**認証**: 不要
-
-**リクエストボディ**:
-```json
-{
-  "code": "4/0Aci98E--LlB8rdAuUbw9oh5m0I6Da4keyz...",
-  "state": "508f4e9fbbdbf7df62e1d3333d45bc6f",
-  "device_type": "web"  // オプション
-}
-```
-
-**レスポンス** (200 OK):
-```json
-{
-  "success": true,
-  "code": "4/0Aci98E--LlB8rdAuUbw9oh5m0I6Da4keyz...",
-  "state": "508f4e9fbbdbf7df62e1d3333d45bc6f"
-}
-```
-
----
-
-#### `POST /auth/refresh`
-
-トークンリフレッシュ
-
-**認証**: 不要
-
-**リクエストボディ**:
-```json
-{
-  "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-}
-```
-
-**レスポンス** (200 OK):
-```json
-{
-  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "expires_in": 1800
-}
-```
-
-**エラー**:
-| ステータス | 説明 |
-|---|---|
-| 400 Bad Request | `refresh_token` が必須 |
-| 401 Unauthorized | 無効なリフレッシュトークン |
-
----
-
-#### `POST /auth/logout`
-
-ログアウト
-
-**認証**: 必須（Bearer トークン）
-
-**リクエストヘッダー**:
-```
-Authorization: Bearer {access_token}
-```
-
-**レスポンス** (200 OK):
-```json
-{
-  "message": "success"
-}
-```
-
-**エラー**:
-| ステータス | 説明 |
-|---|---|
-| 401 Unauthorized | 認証ヘッダー欠落/無効 |
+| 401 Unauthorized | Cookie 欠落 / 無効セッション |
+| 503 Service Unavailable | AuthCore 到達不能（introspection 失敗） |
 
 ---
 
@@ -549,13 +358,12 @@ limit: 1 ページあたりの件数（デフォルト: 10）
 {
   "data": [
     {
-      "id": 1,
-      "username": "john_doe",
-      "email": "john@example.com",
+      "sub": "01HX4Y6Q9M8T3F2B1C0D7R5A9K",
       "display_name": "John Doe",
+      "display_id": "john_doe",
+      "icon_url": "https://example.com/icon.jpg",
       "bio": "Software Engineer",
-      "avatar_url": "https://example.com/avatar.jpg",
-      "oauth_provider": "google",
+      "banner_url": "https://example.com/banner.jpg",
       "created_at": "2026-04-16T10:00:00Z",
       "updated_at": "2026-04-16T10:00:00Z"
     }
@@ -568,50 +376,7 @@ limit: 1 ページあたりの件数（デフォルト: 10）
 
 ---
 
-#### `POST /users`
-
-新規ユーザー作成
-
-**認証**: 必須（Bearer トークン）
-
-**リクエストボディ**:
-```json
-{
-  "username": "john_doe",
-  "email": "john@example.com",
-  "display_name": "John Doe",
-  "bio": "Software Engineer",
-  "avatar_url": "https://example.com/avatar.jpg",
-  "oauth_provider": "google",
-  "oauth_id": "107891234567890123456"
-}
-```
-
-**バリデーション**:
-- `username`: 3-50 文字
-- `email`: 有効なメールアドレス
-- `oauth_id`: プロバイダー側の ID
-
-**レスポンス** (201 Created):
-```json
-{
-  "id": 1,
-  "username": "john_doe",
-  "email": "john@example.com",
-  ...
-}
-```
-
-**エラー**:
-| ステータス | 説明 |
-|---|---|
-| 400 Bad Request | 無効なリクエストボディ |
-| 409 Conflict | ユーザーが既に存在 |
-| 401 Unauthorized | 認証ヘッダー欠落/無効 |
-
----
-
-#### `GET /users/{id}`
+#### `GET /users/{sub}`
 
 特定ユーザー取得
 
@@ -619,19 +384,24 @@ limit: 1 ページあたりの件数（デフォルト: 10）
 
 **パスパラメータ**:
 ```
-id: ユーザー ID
+sub: AuthCore sub (ULID, 26 文字)
 ```
 
 **レスポンス** (200 OK):
 ```json
 {
-  "id": 1,
-  "username": "john_doe",
-  "email": "john@example.com",
+  "sub": "01HX4Y6Q9M8T3F2B1C0D7R5A9K",
   "display_name": "John Doe",
-  ...
+  "display_id": "john_doe",
+  "icon_url": "https://example.com/icon.jpg",
+  "bio": "Software Engineer",
+  "banner_url": "https://example.com/banner.jpg",
+  "created_at": "2026-04-16T10:00:00Z",
+  "updated_at": "2026-04-16T10:00:00Z"
 }
 ```
+
+他ユーザーの `GET /users/{sub}` レスポンスには `is_admin` は含まれない。
 
 **エラー**:
 | ステータス | 説明 |
@@ -640,32 +410,36 @@ id: ユーザー ID
 
 ---
 
-#### `PUT /users/{id}`
+#### `PUT /users/{sub}`
 
 ユーザープロフィール更新
 
-**認証**: 必須（Bearer トークン）
+**認証**: 必須（AuthCore セッション Cookie）
 
-本人のみが自身のプロフィール更新可能。
+本人のみが自身のプロフィール更新可能。SNS 固有属性（`bio` / `banner_url`）
+のみ更新可能。identity / AuthCore 鏡像フィールドはここからは変更できない。
 
 **リクエストボディ**:
 ```json
 {
-  "display_name": "John Updated",
   "bio": "Senior Software Engineer",
-  "avatar_url": "https://example.com/new_avatar.jpg"
+  "banner_url": "https://example.com/banner.jpg"
 }
 ```
+
+**バリデーション**:
+- `bio`: 500 文字以内
+- `banner_url`: 1024 文字以内
 
 **レスポンス** (200 OK):
 ```json
 {
-  "id": 1,
-  "username": "john_doe",
-  ...
-  "display_name": "John Updated",
+  "sub": "01HX4Y6Q9M8T3F2B1C0D7R5A9K",
+  "display_name": "John Doe",
+  "display_id": "john_doe",
+  "icon_url": "https://example.com/icon.jpg",
   "bio": "Senior Software Engineer",
-  "avatar_url": "https://example.com/new_avatar.jpg",
+  "banner_url": "https://example.com/banner.jpg",
   "updated_at": "2026-04-16T10:30:45Z"
 }
 ```
@@ -675,7 +449,7 @@ id: ユーザー ID
 |---|---|
 | 403 Forbidden | 他ユーザーの更新を試行 |
 | 404 Not Found | ユーザーが見つからない |
-| 401 Unauthorized | 認証ヘッダー欠落/無効 |
+| 401 Unauthorized | Cookie 欠落 / 無効セッション |
 
 ---
 
@@ -691,7 +465,7 @@ id: ユーザー ID
 ```
 page: ページ番号（デフォルト: 1）
 limit: 1 ページあたりの件数（デフォルト: 20）
-user_id: 特定ユーザーの投稿に限定（オプション）
+user_id: 特定ユーザーの sub に限定（オプション、ULID）
 ```
 
 **レスポンス** (200 OK):
@@ -699,12 +473,11 @@ user_id: 特定ユーザーの投稿に限定（オプション）
 {
   "data": [
     {
-      "id": 1,
-      "user_id": 1,
+      "id": "01HX4Y7A1Z0K8P3N5M2Q4V9B7C",
+      "user_id": "01HX4Y6Q9M8T3F2B1C0D7R5A9K",
       "content": "Hello, FUJU!",
       "image_urls": ["https://example.com/image1.jpg"],
       "likes_count": 10,
-      "comments_count": 2,
       "created_at": "2026-04-16T10:00:00Z",
       "updated_at": "2026-04-16T10:00:00Z"
     }
@@ -721,7 +494,7 @@ user_id: 特定ユーザーの投稿に限定（オプション）
 
 新規投稿作成
 
-**認証**: 必須（Bearer トークン）
+**認証**: 必須（AuthCore セッション Cookie）
 
 **リクエストボディ**:
 ```json
@@ -741,12 +514,11 @@ user_id: 特定ユーザーの投稿に限定（オプション）
 **レスポンス** (201 Created):
 ```json
 {
-  "id": 123,
-  "user_id": 1,
+  "id": "01HX4Y7A1Z0K8P3N5M2Q4V9B7C",
+  "user_id": "01HX4Y6Q9M8T3F2B1C0D7R5A9K",
   "content": "Hello, FUJU! This is my first post.",
   "image_urls": [...],
   "likes_count": 0,
-  "comments_count": 0,
   "created_at": "2026-04-16T10:30:45Z",
   "updated_at": "2026-04-16T10:30:45Z"
 }
@@ -762,14 +534,14 @@ user_id: 特定ユーザーの投稿に限定（オプション）
 
 **パスパラメータ**:
 ```
-id: 投稿 ID
+id: 投稿 ID (ULID)
 ```
 
 **レスポンス** (200 OK):
 ```json
 {
-  "id": 123,
-  "user_id": 1,
+  "id": "01HX4Y7A1Z0K8P3N5M2Q4V9B7C",
+  "user_id": "01HX4Y6Q9M8T3F2B1C0D7R5A9K",
   "content": "Hello, FUJU!",
   ...
 }
@@ -786,13 +558,13 @@ id: 投稿 ID
 
 投稿削除
 
-**認証**: 必須（Bearer トークン）
+**認証**: 必須（AuthCore セッション Cookie）
 
 投稿作成者のみが削除可能。
 
 **パスパラメータ**:
 ```
-id: 投稿 ID
+id: 投稿 ID (ULID)
 ```
 
 **レスポンス** (204 No Content)
@@ -802,76 +574,18 @@ id: 投稿 ID
 |---|---|
 | 403 Forbidden | 他ユーザーの投稿を削除しようとした |
 | 404 Not Found | 投稿が見つからない |
-| 401 Unauthorized | 認証ヘッダー欠落/無効 |
+| 401 Unauthorized | Cookie 欠落 / 無効セッション |
 
 ---
 
-### 5. コメントエンドポイント
+### 5. コメントエンドポイント（暫定）
 
-#### `POST /posts/{id}/comments`
+> コメントは Post 機能タスク（`02-implement-post-feature.md`）で
+> Post の reply に統合される予定。新規実装は reply 側に寄せる想定で、
+> ここは既存 API の暫定仕様として残す。
 
-投稿にコメント追加
-
-**認証**: 必須（Bearer トークン）
-
-**パスパラメータ**:
-```
-id: 投稿 ID
-```
-
-**リクエストボディ**:
-```json
-{
-  "content": "Great post!"
-}
-```
-
-**バリデーション**:
-- `content`: 1-1000 文字
-
-**レスポンス** (201 Created):
-```json
-{
-  "id": 456,
-  "post_id": 123,
-  "user_id": 2,
-  "content": "Great post!",
-  "created_at": "2026-04-16T10:35:00Z",
-  "updated_at": "2026-04-16T10:35:00Z"
-}
-```
-
-**エラー**:
-| ステータス | 説明 |
-|---|---|
-| 404 Not Found | 投稿が見つからない |
-| 400 Bad Request | 無効なリクエストボディ |
-| 401 Unauthorized | 認証ヘッダー欠落/無効 |
-
----
-
-#### `DELETE /posts/{post_id}/comments/{comment_id}`
-
-コメント削除
-
-**認証**: 必須（Bearer トークン）
-
-コメント作成者のみが削除可能。
-
-**パスパラメータ**:
-```
-post_id: 投稿 ID
-comment_id: コメント ID
-```
-
-**レスポンス** (204 No Content)
-
-**エラー**:
-| ステータス | 説明 |
-|---|---|
-| 403 Forbidden | 他ユーザーのコメントを削除しようとした |
-| 404 Not Found | コメント/投稿が見つからない |
-| 401 Unauthorized | 認証ヘッダー欠落/無効 |
+`POST /posts/{id}/comments` / `DELETE /posts/{post_id}/comments/{comment_id}`
+の ID はすべて ULID 文字列。認証は AuthCore セッション Cookie 必須。
 
 ---
 
@@ -883,7 +597,7 @@ comment_id: コメント ID
 
 画像アップロード
 
-**認証**: 必須（Bearer トークン）
+**認証**: 必須（AuthCore セッション Cookie）
 
 **リクエスト形式**: `multipart/form-data`
 
@@ -899,8 +613,8 @@ description: 画像説明（オプション）
 **レスポンス** (201 Created):
 ```json
 {
-  "id": 789,
-  "user_id": 1,
+  "id": "01HX4Y8B3K0L9M2P5N7Q4V8B6D",
+  "user_id": "01HX4Y6Q9M8T3F2B1C0D7R5A9K",
   "filename": "abc123.jpg",
   "url": "https://images.example.com/abc123.jpg",
   "title": "My Photo",
@@ -918,7 +632,7 @@ description: 画像説明（オプション）
 | 400 Bad Request | ファイルが見つからない |
 | 413 Payload Too Large | ファイルサイズ超過 |
 | 415 Unsupported Media Type | 対応していないファイル形式 |
-| 401 Unauthorized | 認証ヘッダー欠落/無効 |
+| 401 Unauthorized | Cookie 欠落 / 無効セッション |
 | 503 Service Unavailable | R2 サービスに接続できない |
 
 ---
@@ -927,7 +641,7 @@ description: 画像説明（オプション）
 
 ユーザーの画像一覧取得
 
-**認証**: 必須（Bearer トークン）
+**認証**: 必須（AuthCore セッション Cookie）
 
 **クエリパラメータ**:
 ```
@@ -940,8 +654,8 @@ limit: 1 ページあたりの件数（デフォルト: 20）
 {
   "data": [
     {
-      "id": 789,
-      "user_id": 1,
+      "id": "01HX4Y8B3K0L9M2P5N7Q4V8B6D",
+      "user_id": "01HX4Y6Q9M8T3F2B1C0D7R5A9K",
       "filename": "abc123.jpg",
       "url": "https://images.example.com/abc123.jpg",
       ...
@@ -959,13 +673,13 @@ limit: 1 ページあたりの件数（デフォルト: 20）
 
 画像削除
 
-**認証**: 必須（Bearer トークン）
+**認証**: 必須（AuthCore セッション Cookie）
 
 画像の所有者のみが削除可能。
 
 **パスパラメータ**:
 ```
-id: 画像 ID
+id: 画像 ID (ULID)
 ```
 
 **レスポンス** (204 No Content)
@@ -977,7 +691,7 @@ R2 バケットからも削除される。
 |---|---|
 | 403 Forbidden | 他ユーザーの画像を削除しようとした |
 | 404 Not Found | 画像が見つからない |
-| 401 Unauthorized | 認証ヘッダー欠落/無効 |
+| 401 Unauthorized | Cookie 欠落 / 無効セッション |
 
 ---
 
@@ -1015,40 +729,53 @@ CORS_ALLOWED_ORIGINS=http://localhost:5173,http://localhost:3000
 CORS_ALLOWED_ORIGINS=*
 ```
 
-### 2. 認証ミドルウェア
+### 2. 認証ミドルウェア（AuthMiddleware）
 
 **ファイル**: `internal/middleware/middleware.go`
 
-**機能**: JWT トークン検証と認証ユーザーの抽出
+**機能**: AuthCore セッション Cookie を introspection で検証し、
+`sub`（ULID）をリクエストコンテキストに保存する。
 
 **処理フロー**:
-1. `Authorization` ヘッダーから `Bearer {token}` を取得
-2. トークン署名検証
-3. 有効期限チェック
-4. `user_id` をコンテキストに保存
-5. 無効な場合は 401 Unauthorized を返す
-
-**トークン形式**:
-```
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-```
+1. Cookie `authcore_session`（`AUTHCORE_SESSION_COOKIE_NAME` で変更可）を取得
+2. `authcore.Client.Introspect(ctx, cookie.Value)` を呼ぶ
+   - `IntrospectCache` 経由で 30s 以内の結果はローカルキャッシュを使用
+3. `ErrInvalidSession` → 401、`ErrUpstream` → 503
+4. 成功時は `auth.SetSubInContext(ctx, session.Sub)` で sub を保存
 
 **エラーレスポンス** (401 Unauthorized):
 ```json
 {
   "code": "UNAUTHORIZED",
-  "message": "Missing or invalid authentication",
+  "message": "authentication required",
   "timestamp": "2026-04-16T10:45:12Z"
 }
 ```
 
+### 3. ハイドレートユーザーミドルウェア（HydrateUserMiddleware）
+
+**ファイル**: `internal/middleware/middleware.go`
+
+**機能**: `AuthMiddleware` で確定した sub をもとに `users` 行を取得し、
+`*domain.User` を context にセットする。lazy-create と 1h TTL 更新を担う。
+
+**処理フロー**:
+1. ctx から sub を取得（`auth.GetSubFromContext`）
+2. `GetOrHydrateUserUseCase.Execute(ctx, sub)` を呼ぶ
+   - 行が無い場合: `authcore.GetProfile` を呼び、`*_cached` を埋めて INSERT
+   - `profile_refreshed_at` が 1h を超えている場合: `GetProfile` を呼び、
+     `*_cached` を更新（fail-open）
+   - それ以外: 既存行をそのまま返す
+3. `auth.SetCurrentUserInContext(ctx, user)` で User を保存
+
 **コンテキスト保存**:
 ```go
 // ハンドラー内でのアクセス
-userID, ok := auth.GetUserIDFromContext(r.Context())
+sub, ok    := auth.GetSubFromContext(r.Context())
+user, ok   := auth.GetCurrentUserFromContext(r.Context())
 ```
 
-### 3. ロギングミドルウェア
+### 4. ロギングミドルウェア
 
 **ファイル**: `internal/middleware/middleware.go`
 
@@ -1068,7 +795,7 @@ timestamp: 2026-04-16T10:45:12Z
 - ステータス 4xx: WARN
 - ステータス 2xx: INFO
 
-### 4. リカバリーミドルウェア
+### 5. リカバリーミドルウェア
 
 **機能**: パニックハンドリング
 
@@ -1084,39 +811,45 @@ timestamp: 2026-04-16T10:45:12Z
 
 ```go
 type User struct {
-  ID            int64          // ユーザー ID（主キー）
-  Username      string         // ユーザー名（3-50 文字）
-  Email         string         // メールアドレス（ユニーク）
-  DisplayName   string         // 表示名
-  Bio           string         // プロフィール説明
-  AvatarURL     string         // プロフィール画像 URL
-  OAuthProvider string         // OAuth プロバイダー（"google", "github" など）
-  OAuthID       string         // プロバイダー側の ID
-  CreatedAt     time.Time      // 作成日時
-  UpdatedAt     time.Time      // 更新日時
-  DeletedAt     *time.Time     // 削除日時（ソフトデリート）
+  Sub                string         // AuthCore sub (ULID, 26 文字, 主キー)
+  DisplayNameCached  string         // AuthCore 由来、1h TTL キャッシュ
+  DisplayIDCached    string         // @handle 相当、1h TTL キャッシュ
+  IconURLCached      string         // アイコン URL、1h TTL キャッシュ
+  ProfileRefreshedAt time.Time      // *_Cached の最終取得時刻
+  Bio                string         // SNS 固有（500 文字以内）
+  BannerURL          string         // SNS 固有（1024 文字以内）
+  IsAdmin            bool           // SNS 運営フラグ（自己書き換え不可）
+  CreatedAt          time.Time
+  UpdatedAt          time.Time
+  DeletedAt          *time.Time
+}
+
+type UpdateUserProfileRequest struct {
+  Bio       *string
+  BannerURL *string
 }
 ```
 
 **バリデーション**:
-- `Username`: 3-50 文字、英数字とアンダースコアのみ
-- `Email`: 有効なメールアドレス形式
-- `OAuthProvider`: "google" または "github"
+- `Bio`: 500 文字以内
+- `BannerURL`: 1024 文字以内
+- AuthCore 由来フィールド（`Sub` / `DisplayName*` / `DisplayID*` / `IconURL*`）は
+  AuthCore 側で検証されるためここでは再検証しない
 
 **DB スキーマ**:
 ```sql
 CREATE TABLE users (
-  id BIGSERIAL PRIMARY KEY,
-  username VARCHAR(50) UNIQUE NOT NULL,
-  email VARCHAR(255) UNIQUE NOT NULL,
-  display_name VARCHAR(100),
-  bio TEXT,
-  avatar_url TEXT,
-  oauth_provider VARCHAR(20),
-  oauth_id VARCHAR(255) UNIQUE,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  deleted_at TIMESTAMP
+  sub                   CHAR(26)      PRIMARY KEY,
+  display_name_cached   VARCHAR(255)  NOT NULL DEFAULT '',
+  display_id_cached     VARCHAR(64)   NOT NULL DEFAULT '',
+  icon_url_cached       VARCHAR(1024) NOT NULL DEFAULT '',
+  profile_refreshed_at  TIMESTAMPTZ   NOT NULL DEFAULT '1970-01-01',
+  bio                   TEXT          NOT NULL DEFAULT '',
+  banner_url            VARCHAR(1024) NOT NULL DEFAULT '',
+  is_admin              BOOLEAN       NOT NULL DEFAULT false,
+  created_at            TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  updated_at            TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  deleted_at            TIMESTAMPTZ   NULL
 );
 ```
 
@@ -1128,15 +861,15 @@ CREATE TABLE users (
 
 ```go
 type Post struct {
-  ID            int64          // 投稿 ID（主キー）
-  UserID        int64          // 投稿者 ID（外部キー）
+  ID            string         // ULID（主キー）
+  UserID        string         // 投稿者 sub（ULID、外部キー）
   Content       string         // 投稿内容（1-5000 文字）
   ImageURLs     []string       // 画像 URL リスト（最大 10 枚）
   LikesCount    int64          // いいね数
-  CommentsCount int64          // コメント数
-  CreatedAt     time.Time      // 作成日時
-  UpdatedAt     time.Time      // 更新日時
-  DeletedAt     *time.Time     // 削除日時（ソフトデリート）
+  CommentsCount int64          // コメント数（暫定、reply 統合で削除予定）
+  CreatedAt     time.Time
+  UpdatedAt     time.Time
+  DeletedAt     *time.Time
 }
 ```
 
@@ -1148,15 +881,14 @@ type Post struct {
 **DB スキーマ**:
 ```sql
 CREATE TABLE posts (
-  id BIGSERIAL PRIMARY KEY,
-  user_id BIGINT NOT NULL REFERENCES users(id),
-  content TEXT NOT NULL,
-  image_urls TEXT[] DEFAULT ARRAY[]::TEXT[],
-  likes_count BIGINT DEFAULT 0,
-  comments_count BIGINT DEFAULT 0,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  deleted_at TIMESTAMP
+  id          CHAR(26)    PRIMARY KEY,
+  user_id     CHAR(26)    NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+  content     TEXT        NOT NULL,
+  image_urls  JSONB       NOT NULL DEFAULT '[]'::jsonb,
+  likes_count INT         NOT NULL DEFAULT 0,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at  TIMESTAMPTZ NULL
 );
 ```
 
@@ -1164,36 +896,10 @@ CREATE TABLE posts (
 
 ### Comment ドメインモデル
 
-**ファイル**: `internal/domain/comment.go`
-
-```go
-type Comment struct {
-  ID        int64          // コメント ID（主キー）
-  PostID    int64          // 投稿 ID（外部キー）
-  UserID    int64          // コメント投稿者 ID（外部キー）
-  Content   string         // コメント内容（1-1000 文字）
-  CreatedAt time.Time      // 作成日時
-  UpdatedAt time.Time      // 更新日時
-  DeletedAt *time.Time     // 削除日時（ソフトデリート）
-}
-```
-
-**バリデーション**:
-- `Content`: 1-1000 文字
-- `PostID` / `UserID`: 必須
-
-**DB スキーマ**:
-```sql
-CREATE TABLE comments (
-  id BIGSERIAL PRIMARY KEY,
-  post_id BIGINT NOT NULL REFERENCES posts(id),
-  user_id BIGINT NOT NULL REFERENCES users(id),
-  content TEXT NOT NULL,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  deleted_at TIMESTAMP
-);
-```
+> コメントは Post 機能タスク（`02-implement-post-feature.md`）で
+> Post の reply に統合され、ドメインモデルごと削除される。
+> 現行の `internal/domain/comment.go` は ID/UserID/PostID を ULID 化した
+> 暫定シェイプとして残しているのみ。新規実装の依存先にしないこと。
 
 ---
 
@@ -1203,17 +909,16 @@ CREATE TABLE comments (
 
 ```go
 type Image struct {
-  ID        int64          // 画像 ID（主キー）
-  UserID    int64          // アップロード者 ID（外部キー）
-  Filename  string         // ファイル名（R2 内の キー）
-  URL       string         // 公開 URL
-  Title     string         // 画像タイトル
-  Description string       // 説明
-  FileSize  int64          // ファイルサイズ（バイト）
-  MimeType  string         // MIME タイプ（"image/jpeg" など）
-  CreatedAt time.Time      // 作成日時
-  UpdatedAt time.Time      // 更新日時
-  DeletedAt *time.Time     // 削除日時（ソフトデリート）
+  ID         string     // ULID（アプリ層で採番）
+  StorageKey string     // R2 オブジェクトキー
+  FileName   string     // 元のファイル名
+  MimeType   string     // MIME タイプ
+  FileSize   int64      // バイト数
+  PublicURL  string     // 公開 URL
+  UserID     string     // アップロード者 sub（ULID）
+  CreatedAt  time.Time
+  UpdatedAt  time.Time
+  DeletedAt  *time.Time
 }
 ```
 
@@ -1224,17 +929,16 @@ type Image struct {
 **DB スキーマ**:
 ```sql
 CREATE TABLE images (
-  id BIGSERIAL PRIMARY KEY,
-  user_id BIGINT NOT NULL REFERENCES users(id),
-  filename VARCHAR(255) NOT NULL,
-  url TEXT NOT NULL,
-  title VARCHAR(255),
-  description TEXT,
-  file_size BIGINT NOT NULL,
-  mime_type VARCHAR(50) NOT NULL,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  deleted_at TIMESTAMP
+  id          CHAR(26)      PRIMARY KEY,
+  storage_key VARCHAR(2000) NOT NULL UNIQUE,
+  file_name   VARCHAR(500)  NOT NULL,
+  mime_type   VARCHAR(100)  NOT NULL,
+  file_size   BIGINT        NOT NULL,
+  public_url  VARCHAR(2000) NOT NULL,
+  user_id     CHAR(26)      NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+  created_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  deleted_at  TIMESTAMPTZ   NULL
 );
 ```
 
@@ -1278,13 +982,9 @@ CREATE TABLE images (
 
 ```go
 func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
-  userID, err := h.getUserIDFromPath(w, r)
-  if err != nil {
-    WriteErrorResponse(w, err)
-    return
-  }
+  sub := r.PathValue("sub")
 
-  user, err := h.getUser.Execute(r.Context(), userID)
+  user, err := h.getUser.Execute(r.Context(), sub)
   if err != nil {
     WriteErrorResponse(w, err)
     return
@@ -1327,42 +1027,30 @@ func WriteErrorResponse(w http.ResponseWriter, err error) {
 
 ## セキュリティ考慮事項
 
-### 1. JWT トークンセキュリティ
+### 1. セッション検証（AuthCore Introspection）
 
-**署名検証**:
-- すべてのトークンは `JWT_SECRET` で HS256 署名
-- 署名検証に失敗した場合は 401 を返す
+**検証方法**:
+- Cookie 値を毎リクエスト AuthCore の introspection エンドポイントで検証
+- service-to-service bearer token（`AUTHCORE_SERVICE_TOKEN`）で保護
+- 30s の in-memory キャッシュでスパイクを吸収
 
-**有効期限**:
-- デフォルト: 1800 秒（30分）
-- 有効期限切れトークンは無効
-
-**リフレッシュトークン**:
-- 有効期限: 3600 秒（60分）
-- 新しいアクセストークンの取得に使用
+**失敗時の挙動**:
+- AuthCore が 401/403 → SNS も 401
+- AuthCore が到達不能 / 5xx → SNS は 503
+- Cookie 欠落 → 401
+- 署名・有効期限・revoke 判定はすべて AuthCore 側が行う
 
 ### 2. CSRF 保護
 
-**State トークン**:
-- OAuth フローで 16 バイトのランダムトークン生成
-- State 値のエコーバック検証により CSRF を防止
-
-**SameSite クッキー属性**:
-```go
-cookie := &http.Cookie{
-  Name:     "session",
-  HttpOnly: true,
-  Secure:   true,
-  SameSite: http.SameSiteLax,
-}
-```
+- OAuth / CSRF 用の state トークン発行は AuthCore 側の責務
+- SNS バックエンドは AuthCore が発行した不透明セッション Cookie を
+  そのまま読み、`SameSite` 属性も AuthCore 側で設定される
 
 ### 3. XSS 対策
 
-**HttpOnly クッキー**:
-```go
-cookie.HttpOnly = true  // JavaScript からのアクセス不可
-```
+**Cookie 属性**:
+- AuthCore が `HttpOnly` / `Secure` / `SameSite` を設定する前提
+- SNS バックエンドは Cookie を書き込まない
 
 **コンテンツの検証**:
 - 投稿コンテンツは HTML エスケープして保存
@@ -1381,13 +1069,15 @@ db.QueryRow("SELECT * FROM users WHERE id = " + userID)
 ### 5. 認可
 
 **エンドポイントレベル**:
-- 一部エンドポイントは認証必須（AuthMiddleware）
+- 一部エンドポイントは認証必須（`AuthMiddleware` + `HydrateUserMiddleware`）
 - ユーザーは自分のリソースのみ操作可能
+- admin 判定は `users.is_admin`（ユーザー自身では書き換え不可）
 
 **チェック例**:
 ```go
 // 投稿削除時、所有者確認
-if post.UserID != userID {
+sub, _ := auth.GetSubFromContext(ctx)
+if post.UserID != sub {
   return errors.Forbidden("can only delete own posts")
 }
 ```
@@ -1398,25 +1088,27 @@ if post.UserID != userID {
 
 ```go
 // 例：1 分間に 60 リクエストまで
-key := fmt.Sprintf("ratelimit:%d:%d", userID, time.Now().Minute())
+sub, _ := auth.GetSubFromContext(ctx)
+key := fmt.Sprintf("ratelimit:%s:%d", sub, time.Now().Minute())
 count, _ := redis.Get(ctx, key)
 if count >= 60 {
   return http.StatusTooManyRequests
 }
 ```
 
-### 7. パスワードレス認証
+### 7. 認証の委譲
 
-現在は OAuth2 のみサポート。パスワードは保存していない。
+本サービスは credential を一切保持しない。identity / パスワード /
+OAuth プロバイダー連携はすべて AuthCore 側の責務。
 
 ### 8. 環境変数の管理
 
 **秘密情報の環境変数化**:
 ```bash
 # .env（ローカル開発用）
-JWT_SECRET=your_secret_key (本番環境では強力な値)
-OAUTH_CLIENT_SECRET=your_secret (GitHub/Google より取得)
+AUTHCORE_SERVICE_TOKEN=your_service_token   # AuthCore から払い出し
 DB_PASSWORD=your_db_password
+R2_SECRET_ACCESS_KEY=your_r2_secret
 ```
 
 **本番環境**:
@@ -1427,11 +1119,11 @@ DB_PASSWORD=your_db_password
 
 **機密情報の除外**:
 ```go
-// 悪い：パスワードをログ
-log.Info("User login", "password", password)
+// 悪い：Cookie 値をログ
+log.Info("Auth attempt", "cookie", cookieValue)
 
-// 良い：機密情報除外
-log.Info("User login", "user_id", userID)
+// 良い：sub のみをログ
+log.Info("Auth attempt", "sub", sub)
 ```
 
 ---
@@ -1495,13 +1187,13 @@ docs/[ドキュメント名]      ドキュメント更新
 
 1. **ブランチ作成**
    ```bash
-   git checkout -b feature/oauth-redirect
+   git checkout -b feature/authcore-hydrate
    ```
 
 2. **コミット**
    ```bash
    git add .
-   git commit -m "feat(auth): Implement OAuth redirect to frontend"
+   git commit -m "feat(auth): Add AuthCore hydrate middleware"
    ```
 
    **コミットメッセージ規約**:
@@ -1515,13 +1207,13 @@ docs/[ドキュメント名]      ドキュメント更新
 
 3. **プッシュ**
    ```bash
-   git push origin feature/oauth-redirect
+   git push origin feature/authcore-hydrate
    ```
 
 4. **プルリクエスト作成（GitHub UI または CLI）**
    ```bash
-   gh pr create --title "OAuth callback redirect to frontend" \
-               --body "Enables OAuth callback to redirect to frontend with code/state parameters"
+   gh pr create --title "Add AuthCore hydrate middleware" \
+               --body "Lazy-create users row on first request and refresh cached profile fields on 1h TTL"
    ```
 
 5. **CI/CD チェック確認**
@@ -1629,8 +1321,7 @@ SERVER_PORT=9000 docker compose up -d
 
 - [Go Documentation](https://golang.org/doc)
 - [PostgreSQL Documentation](https://www.postgresql.org/docs/)
-- [OAuth 2.0 Specification](https://tools.ietf.org/html/rfc6749)
-- [JWT (JSON Web Token) Specification](https://tools.ietf.org/html/rfc7519)
+- [ULID Specification](https://github.com/ulid/spec)
 - [OWASP Security Guidelines](https://owasp.org/)
 - [Docker Documentation](https://docs.docker.com/)
 

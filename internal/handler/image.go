@@ -12,14 +12,14 @@ import (
 	"github.com/fuju/backend/pkg/response"
 )
 
-// ImageHandler contains handlers for image endpoints
+// ImageHandler contains handlers for image endpoints.
 type ImageHandler struct {
 	uploadImage   *imageusecase.UploadImageUseCase
 	getUserImages *imageusecase.GetUserImagesUseCase
 	deleteImage   *imageusecase.DeleteImageUseCase
 }
 
-// NewImageHandler creates a new ImageHandler
+// NewImageHandler creates a new ImageHandler.
 func NewImageHandler(
 	uploadImage *imageusecase.UploadImageUseCase,
 	getUserImages *imageusecase.GetUserImagesUseCase,
@@ -32,22 +32,19 @@ func NewImageHandler(
 	}
 }
 
-// UploadImage handles POST /v1/images
+// UploadImage handles POST /v1/images.
 func (h *ImageHandler) UploadImage(w http.ResponseWriter, r *http.Request) {
-	// Verify authentication
-	userID, ok := auth.GetUserIDFromContext(r.Context())
+	sub, ok := auth.GetSubFromContext(r.Context())
 	if !ok {
 		WriteErrorResponse(w, errors.Unauthorized("authentication required"))
 		return
 	}
 
-	// Parse multipart form (max 6MB)
 	if err := r.ParseMultipartForm(6 * 1024 * 1024); err != nil {
 		WriteErrorResponse(w, errors.InvalidRequest("failed to parse form data", err))
 		return
 	}
 
-	// Get file from form
 	file, fileHeader, err := r.FormFile("file")
 	if err != nil {
 		WriteErrorResponse(w, errors.InvalidRequest("file field is required", err))
@@ -57,40 +54,34 @@ func (h *ImageHandler) UploadImage(w http.ResponseWriter, r *http.Request) {
 		_ = file.Close()
 	}()
 
-	// Read file data
 	fileData, err := io.ReadAll(file)
 	if err != nil {
 		WriteErrorResponse(w, errors.InvalidRequest("failed to read file data", err))
 		return
 	}
 
-	// Validate file size (5MB limit)
 	if len(fileData) > 5*1024*1024 {
 		WriteErrorResponse(w, errors.InvalidRequest("file size exceeds 5MB limit", nil))
 		return
 	}
 
-	// Get MIME type from Content-Type header
 	mimeType := fileHeader.Header.Get("Content-Type")
 	if mimeType == "" {
 		mimeType = "application/octet-stream"
 	}
 
-	// Validate MIME type (only image/* types allowed)
 	if len(mimeType) < 6 || mimeType[:6] != "image/" {
 		WriteErrorResponse(w, errors.InvalidRequest("only image files are allowed", nil))
 		return
 	}
 
-	// Create upload request
 	req := &domain.UploadImageRequest{
 		FileName: fileHeader.Filename,
 		FileData: fileData,
 		MimeType: mimeType,
-		UserID:   userID,
+		UserID:   sub,
 	}
 
-	// Execute upload use case
 	uploadedImage, err := h.uploadImage.Execute(r.Context(), req)
 	if err != nil {
 		WriteErrorResponse(w, err)
@@ -100,23 +91,20 @@ func (h *ImageHandler) UploadImage(w http.ResponseWriter, r *http.Request) {
 	WriteSuccessResponse(w, uploadedImage, http.StatusCreated)
 }
 
-// GetUserImages handles GET /v1/images
+// GetUserImages handles GET /v1/images.
 func (h *ImageHandler) GetUserImages(w http.ResponseWriter, r *http.Request) {
-	// Verify authentication
-	userID, ok := auth.GetUserIDFromContext(r.Context())
+	sub, ok := auth.GetSubFromContext(r.Context())
 	if !ok {
 		WriteErrorResponse(w, errors.Unauthorized("authentication required"))
 		return
 	}
 
-	// Execute get user images use case
-	images, err := h.getUserImages.Execute(r.Context(), userID)
+	images, err := h.getUserImages.Execute(r.Context(), sub)
 	if err != nil {
 		WriteErrorResponse(w, err)
 		return
 	}
 
-	// Prepare list response
 	listResp := &response.ListResponse{
 		Data:   images,
 		Limit:  100,
@@ -127,24 +115,21 @@ func (h *ImageHandler) GetUserImages(w http.ResponseWriter, r *http.Request) {
 	WriteListResponse(w, listResp, http.StatusOK)
 }
 
-// DeleteImage handles DELETE /v1/images/{id}
+// DeleteImage handles DELETE /v1/images/{id}.
 func (h *ImageHandler) DeleteImage(w http.ResponseWriter, r *http.Request) {
-	// Verify authentication
-	userID, ok := auth.GetUserIDFromContext(r.Context())
+	sub, ok := auth.GetSubFromContext(r.Context())
 	if !ok {
 		WriteErrorResponse(w, errors.Unauthorized("authentication required"))
 		return
 	}
 
-	// Get image ID from URL path
 	imageID := r.PathValue("id")
-	if imageID == "" {
-		WriteErrorResponse(w, errors.InvalidRequest("image ID is required", nil))
+	if !ulidPattern.MatchString(imageID) {
+		WriteErrorResponse(w, errors.InvalidRequest("invalid image ID", nil))
 		return
 	}
 
-	// Execute delete image use case
-	if err := h.deleteImage.Execute(r.Context(), imageID, userID); err != nil {
+	if err := h.deleteImage.Execute(r.Context(), imageID, sub); err != nil {
 		WriteErrorResponse(w, err)
 		return
 	}

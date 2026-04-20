@@ -3,33 +3,41 @@ package user
 
 import (
 	"context"
+	stderrors "errors"
+	"time"
 
 	"github.com/fuju/backend/internal/domain"
 	"github.com/fuju/backend/internal/repository"
+	"github.com/fuju/backend/pkg/authcore"
 	"github.com/fuju/backend/pkg/errors"
 )
 
-// GetUserUseCase represents the use case for getting a user
+// DefaultProfileTTL controls how long a cached AuthCore profile is considered
+// fresh before a refresh is attempted.
+const DefaultProfileTTL = time.Hour
+
+// GetUserUseCase fetches a user by sub. No hydrate. Intended for public
+// reads of someone's profile; the caller should run the hydrate flow
+// separately for the viewer.
 type GetUserUseCase struct {
 	userRepo repository.UserRepository
 }
 
-// NewGetUserUseCase creates a new GetUserUseCase
+// NewGetUserUseCase creates a new GetUserUseCase.
 func NewGetUserUseCase(userRepo repository.UserRepository) *GetUserUseCase {
 	return &GetUserUseCase{userRepo: userRepo}
 }
 
-// Execute retrieves a user by ID
-func (uc *GetUserUseCase) Execute(ctx context.Context, userID int64) (*domain.User, error) {
-	if userID <= 0 {
-		return nil, errors.InvalidRequest("invalid user ID", nil)
+// Execute retrieves a user by sub.
+func (uc *GetUserUseCase) Execute(ctx context.Context, sub string) (*domain.User, error) {
+	if sub == "" {
+		return nil, errors.InvalidRequest("sub is required", nil)
 	}
 
-	user, err := uc.userRepo.GetByID(ctx, userID)
+	user, err := uc.userRepo.GetBySub(ctx, sub)
 	if err != nil {
 		return nil, errors.DatabaseError("failed to get user", err)
 	}
-
 	if user == nil {
 		return nil, errors.NotFound("user not found")
 	}
@@ -37,112 +45,149 @@ func (uc *GetUserUseCase) Execute(ctx context.Context, userID int64) (*domain.Us
 	return user, nil
 }
 
-// CreateUserUseCase represents the use case for creating a user
-type CreateUserUseCase struct {
+// GetOrHydrateUserUseCase implements the lazy-create + TTL-refresh flow.
+// For an authenticated sub we either look up the SNS mirror row and refresh
+// its cached profile (when older than ttl), or we create the row the first
+// time we see the sub.
+//
+// AuthCore outages on profile fetch are fail-open: the cached row is
+// returned as-is and profile_refreshed_at is left stale so the next call
+// retries.
+type GetOrHydrateUserUseCase struct {
 	userRepo repository.UserRepository
+	authcore authcore.Client
+	ttl      time.Duration
+	now      func() time.Time
 }
 
-// NewCreateUserUseCase creates a new CreateUserUseCase
-func NewCreateUserUseCase(userRepo repository.UserRepository) *CreateUserUseCase {
-	return &CreateUserUseCase{userRepo: userRepo}
+// NewGetOrHydrateUserUseCase constructs the use case. ttl==0 means the
+// default TTL is used.
+func NewGetOrHydrateUserUseCase(userRepo repository.UserRepository, client authcore.Client, ttl time.Duration) *GetOrHydrateUserUseCase {
+	if ttl <= 0 {
+		ttl = DefaultProfileTTL
+	}
+	return &GetOrHydrateUserUseCase{
+		userRepo: userRepo,
+		authcore: client,
+		ttl:      ttl,
+		now:      time.Now,
+	}
 }
 
-// Execute creates a new user
-func (uc *CreateUserUseCase) Execute(ctx context.Context, req *domain.CreateUserRequest) (*domain.User, error) {
-	// Check if username already exists
-	existing, err := uc.userRepo.GetByUsername(ctx, req.Username)
-	if err != nil {
-		return nil, errors.DatabaseError("failed to check username", err)
+// Execute returns the user row for sub, creating or refreshing it when
+// needed.
+func (uc *GetOrHydrateUserUseCase) Execute(ctx context.Context, sub string) (*domain.User, error) {
+	if sub == "" {
+		return nil, errors.InvalidRequest("sub is required", nil)
 	}
 
-	if existing != nil {
-		return nil, errors.Conflict("username already exists")
-	}
-
-	user := &domain.User{
-		Username:      req.Username,
-		Email:         req.Email,
-		DisplayName:   req.DisplayName,
-		Bio:           req.Bio,
-		AvatarURL:     req.AvatarURL,
-		OAuthProvider: req.OAuthProvider,
-		OAuthID:       req.OAuthID,
-	}
-
-	if err := user.Validate(); err != nil {
-		return nil, errors.ValidationFailed(err.Error())
-	}
-
-	created, err := uc.userRepo.Create(ctx, user)
-	if err != nil {
-		return nil, errors.DatabaseError("failed to create user", err)
-	}
-
-	return created, nil
-}
-
-// UpdateUserUseCase represents the use case for updating a user
-type UpdateUserUseCase struct {
-	userRepo repository.UserRepository
-}
-
-// NewUpdateUserUseCase creates a new UpdateUserUseCase
-func NewUpdateUserUseCase(userRepo repository.UserRepository) *UpdateUserUseCase {
-	return &UpdateUserUseCase{userRepo: userRepo}
-}
-
-// Execute updates a user
-func (uc *UpdateUserUseCase) Execute(ctx context.Context, userID int64, currentUserID int64, req *domain.UpdateUserRequest) (*domain.User, error) {
-	// Authorization check - user can only update their own profile
-	if userID != currentUserID {
-		return nil, errors.Forbidden("you can only update your own profile")
-	}
-
-	user, err := uc.userRepo.GetByID(ctx, userID)
+	existing, err := uc.userRepo.GetBySub(ctx, sub)
 	if err != nil {
 		return nil, errors.DatabaseError("failed to get user", err)
 	}
 
-	if user == nil {
-		return nil, errors.NotFound("user not found")
+	now := uc.now()
+
+	if existing == nil {
+		profile, perr := uc.authcore.GetProfile(ctx, sub)
+		user := &domain.User{Sub: sub, CreatedAt: now, UpdatedAt: now}
+		if perr == nil {
+			user.DisplayNameCached = profile.DisplayName
+			user.DisplayIDCached = profile.DisplayID
+			user.IconURLCached = profile.IconURL
+			user.ProfileRefreshedAt = now
+		}
+		// If AuthCore is unreachable on first hydrate we still insert a
+		// blank mirror row so we do not lose the authenticated sub; the
+		// next request will retry hydration.
+
+		saved, err := uc.userRepo.Upsert(ctx, user)
+		if err != nil {
+			return nil, errors.DatabaseError("failed to create user", err)
+		}
+		return saved, nil
 	}
 
-	// Apply partial updates
-	if req.DisplayName != nil {
-		user.DisplayName = *req.DisplayName
+	if now.Sub(existing.ProfileRefreshedAt) < uc.ttl {
+		return existing, nil
 	}
+
+	profile, perr := uc.authcore.GetProfile(ctx, sub)
+	if perr != nil {
+		// fail-open: return the stale mirror, retry next call
+		if stderrors.Is(perr, authcore.ErrNotFound) {
+			return nil, errors.NotFound("user not found in authcore")
+		}
+		return existing, nil
+	}
+
+	existing.DisplayNameCached = profile.DisplayName
+	existing.DisplayIDCached = profile.DisplayID
+	existing.IconURLCached = profile.IconURL
+	existing.ProfileRefreshedAt = now
+
+	saved, err := uc.userRepo.Upsert(ctx, existing)
+	if err != nil {
+		return nil, errors.DatabaseError("failed to refresh user", err)
+	}
+	return saved, nil
+}
+
+// UpdateUserProfileUseCase updates SNS-owned profile fields (bio, banner).
+type UpdateUserProfileUseCase struct {
+	userRepo repository.UserRepository
+}
+
+// NewUpdateUserProfileUseCase creates a new UpdateUserProfileUseCase.
+func NewUpdateUserProfileUseCase(userRepo repository.UserRepository) *UpdateUserProfileUseCase {
+	return &UpdateUserProfileUseCase{userRepo: userRepo}
+}
+
+// Execute updates the authenticated user's profile. Cross-user updates are
+// rejected — the caller must pass their own sub as both targetSub and
+// currentSub.
+func (uc *UpdateUserProfileUseCase) Execute(ctx context.Context, targetSub, currentSub string, req *domain.UpdateUserProfileRequest) (*domain.User, error) {
+	if targetSub != currentSub {
+		return nil, errors.Forbidden("you can only update your own profile")
+	}
+	if req == nil {
+		return nil, errors.InvalidRequest("request body is required", nil)
+	}
+
+	// Validate the proposed bounds before writing.
+	probe := &domain.User{}
 	if req.Bio != nil {
-		user.Bio = *req.Bio
+		probe.Bio = *req.Bio
 	}
-	if req.AvatarURL != nil {
-		user.AvatarURL = *req.AvatarURL
+	if req.BannerURL != nil {
+		probe.BannerURL = *req.BannerURL
 	}
-
-	if err := user.Validate(); err != nil {
+	if err := probe.Validate(); err != nil {
 		return nil, errors.ValidationFailed(err.Error())
 	}
 
-	updated, err := uc.userRepo.Update(ctx, user)
+	updated, err := uc.userRepo.UpdateProfile(ctx, targetSub, req)
 	if err != nil {
-		return nil, errors.DatabaseError("failed to update user", err)
+		return nil, errors.DatabaseError("failed to update user profile", err)
 	}
-
+	if updated == nil {
+		return nil, errors.NotFound("user not found")
+	}
 	return updated, nil
 }
 
-// ListUsersUseCase represents the use case for listing users
+// ListUsersUseCase lists users with pagination.
 type ListUsersUseCase struct {
 	userRepo repository.UserRepository
 }
 
-// NewListUsersUseCase creates a new ListUsersUseCase
+// NewListUsersUseCase creates a new ListUsersUseCase.
 func NewListUsersUseCase(userRepo repository.UserRepository) *ListUsersUseCase {
 	return &ListUsersUseCase{userRepo: userRepo}
 }
 
-// Execute lists users with pagination
+// Execute lists users with pagination.
 func (uc *ListUsersUseCase) Execute(ctx context.Context, limit, offset int) ([]*domain.User, int, error) {
-	// Validate pagination parameters
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}

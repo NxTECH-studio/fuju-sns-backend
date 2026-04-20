@@ -4,12 +4,15 @@ package middleware
 import (
 	"context"
 	"encoding/json"
+	stderrors "errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	userusecase "github.com/fuju/backend/internal/usecase/user"
 	"github.com/fuju/backend/pkg/auth"
+	"github.com/fuju/backend/pkg/authcore"
 	"github.com/fuju/backend/pkg/errors"
 	"github.com/fuju/backend/pkg/logger"
 	"github.com/fuju/backend/pkg/response"
@@ -20,7 +23,7 @@ const (
 	ContentTypeJSON = "application/json"
 )
 
-// ResponseWriter wraps http.ResponseWriter to capture status code
+// ResponseWriter wraps http.ResponseWriter to capture status code.
 type responseWriter struct {
 	http.ResponseWriter
 	statusCode int
@@ -42,7 +45,7 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	return rw.ResponseWriter.Write(b)
 }
 
-// LoggingMiddleware logs HTTP requests and responses
+// LoggingMiddleware logs HTTP requests and responses.
 func LoggingMiddleware(log *logger.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -62,49 +65,64 @@ func LoggingMiddleware(log *logger.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// extractUserIDFromAuthHeader validates JWT token and extracts user ID
-func extractUserIDFromAuthHeader(tokenManager *auth.TokenManager, authHeader string) (int64, bool) {
-	if authHeader == "" {
-		return 0, false
+// AuthMiddleware validates the session cookie against AuthCore via
+// introspection and stores the resolved sub on the request context.
+// Fail-closed: a failed introspection returns 401; an upstream outage
+// returns 503.
+func AuthMiddleware(client authcore.Client, cookieName string) func(http.Handler) http.Handler {
+	if cookieName == "" {
+		cookieName = "authcore_session"
 	}
-
-	parts := strings.SplitN(authHeader, " ", 2)
-	if len(parts) != 2 || parts[0] != "Bearer" {
-		return 0, false
-	}
-
-	claims, err := tokenManager.ValidateToken(parts[1])
-	if err != nil {
-		return 0, false
-	}
-
-	return claims.UserID, true
-}
-
-// AuthMiddleware validates JWT tokens or session cookies
-func AuthMiddleware(tokenManager *auth.TokenManager) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			authHeader := r.Header.Get("Authorization")
-			userID, found := extractUserIDFromAuthHeader(tokenManager, authHeader)
-
-			if !found {
-				errResp := response.ErrorResponse{
-					Code:      errors.ErrUnauthorized,
-					Message:   "Missing or invalid authentication",
-					Timestamp: time.Now(),
-				}
-				writeJSONErrorResponse(w, http.StatusUnauthorized, errResp)
+			cookie, err := r.Cookie(cookieName)
+			if err != nil || cookie.Value == "" {
+				writeAuthError(w, http.StatusUnauthorized, errors.ErrUnauthorized, "authentication required")
 				return
 			}
 
-			ctx := auth.SetUserInContext(r.Context(), userID)
+			session, err := client.Introspect(r.Context(), cookie.Value)
+			if err != nil {
+				if stderrors.Is(err, authcore.ErrInvalidSession) {
+					writeAuthError(w, http.StatusUnauthorized, errors.ErrUnauthorized, "invalid session")
+					return
+				}
+				writeAuthError(w, http.StatusServiceUnavailable, errors.ErrExternalService, "authentication backend unavailable")
+				return
+			}
+
+			ctx := auth.SetSubInContext(r.Context(), session.Sub)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
 
-// RecoveryMiddleware handles panics
+// HydrateUserMiddleware runs after AuthMiddleware and materialises the
+// hydrated User onto the context. Failures surface as 500 errors — at this
+// point the caller is authenticated but we could not produce a user row.
+func HydrateUserMiddleware(uc *userusecase.GetOrHydrateUserUseCase) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			sub, ok := auth.GetSubFromContext(r.Context())
+			if !ok {
+				writeAuthError(w, http.StatusUnauthorized, errors.ErrUnauthorized, "authentication required")
+				return
+			}
+
+			user, err := uc.Execute(r.Context(), sub)
+			if err != nil {
+				statusCode := errors.ToHTTPStatus(err)
+				writeAuthError(w, statusCode, errors.ErrInternal, "failed to load user")
+				return
+			}
+
+			ctx := auth.SetCurrentUserInContext(r.Context(), user)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
+// RecoveryMiddleware handles panics.
 func RecoveryMiddleware(log *logger.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -112,12 +130,7 @@ func RecoveryMiddleware(log *logger.Logger) func(http.Handler) http.Handler {
 				if err := recover(); err != nil {
 					panicErr := fmt.Errorf("panic recovered: %v", err)
 					log.Error(r.Context(), "Panic recovered", panicErr)
-					errResp := response.ErrorResponse{
-						Code:      errors.ErrInternal,
-						Message:   "Internal server error",
-						Timestamp: time.Now(),
-					}
-					writeJSONErrorResponse(w, http.StatusInternalServerError, errResp)
+					writeAuthError(w, http.StatusInternalServerError, errors.ErrInternal, "Internal server error")
 				}
 			}()
 			next.ServeHTTP(w, r)
@@ -125,13 +138,12 @@ func RecoveryMiddleware(log *logger.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// CORSMiddleware adds CORS headers based on allowed origins
+// CORSMiddleware adds CORS headers based on allowed origins.
 func CORSMiddleware(allowedOrigins string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
 
-			// Check if origin is allowed
 			if allowedOrigins == "*" {
 				w.Header().Set("Access-Control-Allow-Origin", "*")
 			} else if isOriginAllowed(origin, allowedOrigins) {
@@ -153,7 +165,7 @@ func CORSMiddleware(allowedOrigins string) func(http.Handler) http.Handler {
 	}
 }
 
-// isOriginAllowed checks if the given origin is in the allowed origins list
+// isOriginAllowed checks if the given origin is in the allowed origins list.
 func isOriginAllowed(origin, allowedOrigins string) bool {
 	if origin == "" {
 		return false
@@ -168,17 +180,21 @@ func isOriginAllowed(origin, allowedOrigins string) bool {
 	return false
 }
 
-// writeJSONErrorResponse writes a JSON error response with appropriate status code
-func writeJSONErrorResponse(w http.ResponseWriter, statusCode int, errResp response.ErrorResponse) {
+// writeAuthError writes a JSON error response with appropriate status code.
+func writeAuthError(w http.ResponseWriter, statusCode int, code, message string) {
+	errResp := response.ErrorResponse{
+		Code:      code,
+		Message:   message,
+		Timestamp: time.Now(),
+	}
 	w.Header().Set("Content-Type", ContentTypeJSON)
 	w.WriteHeader(statusCode)
 	if err := json.NewEncoder(w).Encode(errResp); err != nil {
-		// Log encoding error but don't stop processing
 		_ = err
 	}
 }
 
-// ContextTimeoutMiddleware adds a timeout to context
+// ContextTimeoutMiddleware adds a timeout to context.
 func ContextTimeoutMiddleware(timeout time.Duration) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

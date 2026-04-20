@@ -7,15 +7,16 @@ import (
 	"github.com/fuju/backend/internal/domain"
 	"github.com/fuju/backend/internal/repository"
 	"github.com/fuju/backend/pkg/errors"
+	"github.com/oklog/ulid/v2"
 )
 
-// AddCommentUseCase represents the use case for adding a comment
+// AddCommentUseCase represents the use case for adding a comment.
 type AddCommentUseCase struct {
 	commentRepo repository.CommentRepository
 	postRepo    repository.PostRepository
 }
 
-// NewAddCommentUseCase creates a new AddCommentUseCase
+// NewAddCommentUseCase creates a new AddCommentUseCase.
 func NewAddCommentUseCase(
 	commentRepo repository.CommentRepository,
 	postRepo repository.PostRepository,
@@ -26,8 +27,8 @@ func NewAddCommentUseCase(
 	}
 }
 
-// Execute adds a comment to a post
-func (uc *AddCommentUseCase) Execute(ctx context.Context, postID int64, userID int64, req *domain.CreateCommentRequest) (*domain.Comment, error) {
+// Execute adds a comment to a post.
+func (uc *AddCommentUseCase) Execute(ctx context.Context, postID, userSub string, req *domain.CreateCommentRequest) (*domain.Comment, error) {
 	post, err := uc.postRepo.GetByID(ctx, postID)
 	if err != nil {
 		return nil, errors.DatabaseError("failed to get post", err)
@@ -38,8 +39,9 @@ func (uc *AddCommentUseCase) Execute(ctx context.Context, postID int64, userID i
 	}
 
 	comment := &domain.Comment{
+		ID:      ulid.Make().String(),
 		PostID:  postID,
-		UserID:  userID,
+		UserID:  userSub,
 		Content: req.Content,
 	}
 
@@ -59,13 +61,13 @@ func (uc *AddCommentUseCase) Execute(ctx context.Context, postID int64, userID i
 	return created, nil
 }
 
-// DeleteCommentUseCase represents the use case for deleting a comment
+// DeleteCommentUseCase represents the use case for deleting a comment.
 type DeleteCommentUseCase struct {
 	commentRepo repository.CommentRepository
 	postRepo    repository.PostRepository
 }
 
-// NewDeleteCommentUseCase creates a new DeleteCommentUseCase
+// NewDeleteCommentUseCase creates a new DeleteCommentUseCase.
 func NewDeleteCommentUseCase(
 	commentRepo repository.CommentRepository,
 	postRepo repository.PostRepository,
@@ -76,8 +78,8 @@ func NewDeleteCommentUseCase(
 	}
 }
 
-// Execute deletes a comment
-func (uc *DeleteCommentUseCase) Execute(ctx context.Context, commentID int64, currentUserID int64) error {
+// Execute deletes a comment.
+func (uc *DeleteCommentUseCase) Execute(ctx context.Context, commentID, currentUserSub string) error {
 	comment, err := uc.commentRepo.GetByID(ctx, commentID)
 	if err != nil {
 		return errors.DatabaseError("failed to get comment", err)
@@ -87,7 +89,7 @@ func (uc *DeleteCommentUseCase) Execute(ctx context.Context, commentID int64, cu
 		return errors.NotFound("comment not found")
 	}
 
-	if comment.UserID != currentUserID {
+	if comment.UserID != currentUserSub {
 		return errors.Forbidden("you can only delete your own comments")
 	}
 

@@ -84,7 +84,7 @@ func NewR2Service() (*R2Service, error) {
 // Upload uploads a file to R2 storage
 func (r *R2Service) Upload(ctx context.Context, req *domain.UploadImageRequest) (storageKey, publicURL string, err error) {
 	// Generate storage key: images/{userID}/{uuid}/{filename}
-	storageKey = fmt.Sprintf("images/%d/%s", req.UserID, req.FileName)
+	storageKey = fmt.Sprintf("images/%s/%s", req.UserID, req.FileName)
 
 	// Upload to R2
 	_, err = r.client.PutObject(ctx, &s3.PutObjectInput{
