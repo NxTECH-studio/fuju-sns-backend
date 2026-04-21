@@ -160,6 +160,11 @@ func (r *ImageRepository) ListByPostID(ctx context.Context, postID string) ([]*d
 
 // ListByPostIDs batches ListByPostID. Posts with no images are absent
 // from the returned map; ordering within each post is position ASC.
+// Unlike ListByPostID, this path scans inline rather than delegating
+// to scanImage: the SELECT carries two leading join columns
+// (pi.post_id, pi.position) that pgx.Row cannot partial-scan into a
+// shared helper. Keeping the scan adjacent to the SELECT makes column
+// ordering easy to verify at review time.
 func (r *ImageRepository) ListByPostIDs(ctx context.Context, postIDs []string) (map[string][]*domain.Image, error) {
 	out := make(map[string][]*domain.Image, len(postIDs))
 	if len(postIDs) == 0 {

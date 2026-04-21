@@ -136,9 +136,20 @@ func TestOGPJobQueue_Contract_Postgres(t *testing.T) {
 // must always see distinct jobs. This property is inherent to the
 // postgres implementation (inmemory serializes under a mutex) and
 // cannot be exercised by the backend-agnostic contract runner.
+//
+// The test relies on the shared integrationPool having room for at
+// least 2 concurrent connections (pgxpool's default MaxConns is
+// max(4, runtime.NumCPU())). If a future change forces MaxConns=1
+// the two goroutines will serialize and both claims will succeed
+// without actually exercising the lock-contention path — the
+// invariant would still hold but the test would be toothless.
 func TestOGPJobQueue_ConcurrentClaim_Postgres(t *testing.T) {
 	c := newContract(t)
-	ctx := context.Background()
+
+	// Bound the whole test so a future regression that wedges the
+	// CTE (or exhausts the pool) fails visibly instead of hanging.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
 
 	// Seed a user + post + two queued jobs.
 	if _, err := c.Users.Upsert(ctx, testUser("01HAAAAAAAAAAAAAAAAAAAAAAA")); err != nil {
@@ -169,6 +180,14 @@ func TestOGPJobQueue_ConcurrentClaim_Postgres(t *testing.T) {
 	start := make(chan struct{})
 	for i := 0; i < 2; i++ {
 		go func() {
+			// Surface panics as a result so the receiver never
+			// blocks on a wedged goroutine; without this a panic in
+			// Claim would leave the drain loop waiting forever.
+			defer func() {
+				if r := recover(); r != nil {
+					results <- result{err: fmt.Errorf("panic in claim goroutine: %v", r)}
+				}
+			}()
 			<-start
 			j, err := c.OGPJobs.Claim(ctx, "worker")
 			results <- result{j, err}
@@ -178,17 +197,21 @@ func TestOGPJobQueue_ConcurrentClaim_Postgres(t *testing.T) {
 
 	seen := make(map[string]bool)
 	for i := 0; i < 2; i++ {
-		r := <-results
-		if r.err != nil {
-			t.Fatalf("claim: %v", r.err)
+		select {
+		case r := <-results:
+			if r.err != nil {
+				t.Fatalf("claim: %v", r.err)
+			}
+			if r.job == nil {
+				t.Fatalf("expected a job, got nil")
+			}
+			if seen[r.job.ID] {
+				t.Fatalf("SKIP LOCKED invariant violated: job %s claimed twice", r.job.ID)
+			}
+			seen[r.job.ID] = true
+		case <-ctx.Done():
+			t.Fatalf("timed out waiting for claim result #%d", i)
 		}
-		if r.job == nil {
-			t.Fatalf("expected a job, got nil")
-		}
-		if seen[r.job.ID] {
-			t.Fatalf("SKIP LOCKED invariant violated: job %s claimed twice", r.job.ID)
-		}
-		seen[r.job.ID] = true
 	}
 	if len(seen) != 2 {
 		t.Errorf("expected 2 distinct jobs claimed, got %d", len(seen))

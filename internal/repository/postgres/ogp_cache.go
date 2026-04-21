@@ -109,7 +109,11 @@ func (r *OGPCacheRepository) Upsert(ctx context.Context, preview *domain.OGPPrev
 
 // ListByPostIDs resolves every post_ogp → ogp_cache chain for the
 // given posts, returning previews grouped by post ID and ordered by
-// position ASC within each group.
+// position ASC within each group. Like the sister method in
+// image.go, the scan is inlined because the SELECT carries a leading
+// join column (po.post_id) that pgx.Row cannot split into a shared
+// helper; keeping the scan adjacent lets reviewers eyeball column
+// order against ogpCacheJoinColumns.
 func (r *OGPCacheRepository) ListByPostIDs(ctx context.Context, postIDs []string) (map[string][]*domain.OGPPreview, error) {
 	out := make(map[string][]*domain.OGPPreview, len(postIDs))
 	if len(postIDs) == 0 {
