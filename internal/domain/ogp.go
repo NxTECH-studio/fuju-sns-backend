@@ -39,11 +39,16 @@ func (p *OGPPreview) IsExpired(now time.Time) bool {
 }
 
 // OGPJob is a single unit of work for the background fetch worker.
+// Position is the 0-based index of the URL within the originating post's
+// content; the worker uses it to attach the fetched preview at the same
+// slot the enqueuer reserved, preserving order across the cache-hit and
+// cache-miss branches.
 type OGPJob struct {
 	ID         string
 	URLHash    string
 	URL        string
 	PostID     string
+	Position   int
 	EnqueuedAt time.Time
 	StartedAt  *time.Time
 	FinishedAt *time.Time

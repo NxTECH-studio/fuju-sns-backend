@@ -52,7 +52,7 @@ func newWorkerFixture(t *testing.T, handler http.Handler) (*Worker, *httptest.Se
 // use. Declared here so the test file doesn't have to import the full
 // repository package.
 type OGPJobQueueLike interface {
-	Enqueue(ctx context.Context, id, urlHash, url, postID string) error
+	Enqueue(ctx context.Context, id, urlHash, url, postID string, position int) error
 	Claim(ctx context.Context, workerID string) (*domain.OGPJob, error)
 	MarkDone(ctx context.Context, jobID string) error
 	MarkFailed(ctx context.Context, jobID, reason string, retriable bool) error
@@ -67,7 +67,7 @@ func TestWorker_Success_CachesAndMarksDone(t *testing.T) {
 	target, _ := ogp.Normalize(srv.URL + "/article")
 	hash := ogp.Hash(target)
 	jobID := ulid.Make().String()
-	if err := queue.Enqueue(context.Background(), jobID, hash, target, testPostID); err != nil {
+	if err := queue.Enqueue(context.Background(), jobID, hash, target, testPostID, 0); err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
 
@@ -101,7 +101,7 @@ func TestWorker_5xxRetriable_LeavesQueued(t *testing.T) {
 	target, _ := ogp.Normalize(srv.URL + "/")
 	hash := ogp.Hash(target)
 	jobID := ulid.Make().String()
-	_ = queue.Enqueue(context.Background(), jobID, hash, target, testPostID)
+	_ = queue.Enqueue(context.Background(), jobID, hash, target, testPostID, 0)
 
 	w.runOnce(context.Background())
 
@@ -125,7 +125,7 @@ func TestWorker_4xxNonRetriable_WritesErrorRow(t *testing.T) {
 	target, _ := ogp.Normalize(srv.URL + "/missing")
 	hash := ogp.Hash(target)
 	jobID := ulid.Make().String()
-	_ = queue.Enqueue(context.Background(), jobID, hash, target, testPostID)
+	_ = queue.Enqueue(context.Background(), jobID, hash, target, testPostID, 0)
 
 	w.runOnce(context.Background())
 

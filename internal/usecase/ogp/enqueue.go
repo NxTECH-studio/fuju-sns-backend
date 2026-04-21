@@ -81,7 +81,7 @@ func (e *Enqueuer) EnqueueForPost(ctx context.Context, post *domain.Post) {
 		}
 
 		id := ulid.Make().String()
-		if err := e.queue.Enqueue(ctx, id, urlHash, normalized, post.ID); err != nil {
+		if err := e.queue.Enqueue(ctx, id, urlHash, normalized, post.ID, position); err != nil {
 			e.warn(ctx, "ogp enqueue failed", "post_id", post.ID, "url", normalized, "err", err)
 		}
 	}

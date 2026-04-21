@@ -1293,7 +1293,7 @@ func NewOGPJobQueue() repository.OGPJobQueue {
 
 // Enqueue adds a queued job. Duplicate ids are rejected silently; the
 // caller owns id generation so this is only defensive.
-func (q *OGPJobQueue) Enqueue(_ context.Context, id, urlHash, url, postID string) error {
+func (q *OGPJobQueue) Enqueue(_ context.Context, id, urlHash, url, postID string, position int) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if _, exists := q.jobs[id]; exists {
@@ -1304,6 +1304,7 @@ func (q *OGPJobQueue) Enqueue(_ context.Context, id, urlHash, url, postID string
 		URLHash:    urlHash,
 		URL:        url,
 		PostID:     postID,
+		Position:   position,
 		EnqueuedAt: time.Now(),
 		Status:     domain.OGPJobQueued,
 	}

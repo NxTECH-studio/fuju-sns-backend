@@ -103,7 +103,7 @@ func (w *Worker) process(ctx context.Context, job *domain.OGPJob) {
 			return
 		}
 		if job.PostID != "" {
-			if attachErr := w.posts.AttachOGP(ctx, job.PostID, preview.URLHash, 0); attachErr != nil {
+			if attachErr := w.posts.AttachOGP(ctx, job.PostID, preview.URLHash, job.Position); attachErr != nil {
 				w.warn(ctx, "ogp attach failed", "job_id", job.ID, "err", attachErr)
 			}
 		}
