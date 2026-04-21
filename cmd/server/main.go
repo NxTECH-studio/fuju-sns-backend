@@ -24,6 +24,7 @@ import (
 	timelineusecase "github.com/fuju/backend/internal/usecase/timeline"
 	userusecase "github.com/fuju/backend/internal/usecase/user"
 	"github.com/fuju/backend/pkg/authcore"
+	"github.com/fuju/backend/pkg/cookie"
 	"github.com/fuju/backend/pkg/logger"
 	"github.com/fuju/backend/pkg/ogp"
 	"github.com/fuju/backend/pkg/storage"
@@ -143,10 +144,30 @@ func main() {
 		imageHandler = handler.NewImageHandler(uploadImageUC, getUserImagesUC, deleteImageUC)
 	}
 
+	// Session cookie policy for the Bearer→Cookie handoff endpoints.
+	// SameSite is validated at config.Load() so the parse cannot fail
+	// here; we guard it anyway to avoid a silent fall-through.
+	sessionSameSite, err := cookie.ParseSameSite(cfg.SessionCookieSameSite)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid SESSION_COOKIE_SAMESITE: %v\n", err)
+		os.Exit(1)
+	}
+	sessionCookieCfg := handler.SessionCookieConfig{
+		Name:           cfg.SessionCookieName,
+		Secure:         cfg.SessionCookieSecure,
+		SameSite:       sessionSameSite,
+		Domain:         cfg.SessionCookieDomain,
+		Path:           "/",
+		FallbackMaxAge: cfg.SessionCookieFallbackMaxAge,
+	}
+	sessionHandler := handler.NewSessionHandler(sessionCookieCfg)
+
 	// Middleware chain for authenticated routes: AuthMiddleware (introspect
-	// Bearer token + set sub + set access token) followed by
-	// HydrateUserMiddleware (load / upsert user row).
-	authMW := middleware.AuthMiddleware(cachedAuthCore)
+	// Bearer or Cookie token + set sub / access token / expiry on ctx)
+	// followed by HydrateUserMiddleware (load / upsert user row).
+	authMW := middleware.AuthMiddleware(cachedAuthCore, middleware.AuthMiddlewareConfig{
+		CookieName: cfg.SessionCookieName,
+	})
 	hydrateMW := middleware.HydrateUserMiddleware(userHydrateUC)
 	adminMW := middleware.AdminMiddleware()
 	authed := func(next http.Handler) http.Handler {
@@ -160,6 +181,14 @@ func main() {
 
 	// Health
 	mux.HandleFunc("GET /health", healthHandler.Health)
+
+	// Session handoff (browser auth cookie). POST requires a valid
+	// Bearer token; AuthMiddleware introspects it and the handler
+	// flips the value into an HttpOnly cookie. DELETE is intentionally
+	// public and idempotent so a stale tab can clear its cookie even
+	// after the access token has expired.
+	mux.Handle("POST /v1/auth/session", authMW(http.HandlerFunc(sessionHandler.Issue)))
+	mux.HandleFunc("DELETE /v1/auth/session", sessionHandler.Revoke)
 
 	// Me: authenticated caller's own record (lazy-created / hydrated).
 	mux.Handle("GET /me", authed(http.HandlerFunc(userHandler.Me)))
