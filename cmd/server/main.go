@@ -14,12 +14,18 @@ import (
 	"github.com/fuju/backend/internal/handler"
 	"github.com/fuju/backend/internal/middleware"
 	"github.com/fuju/backend/internal/repository/inmemory"
-	commentusecase "github.com/fuju/backend/internal/usecase/comment"
+	"github.com/fuju/backend/internal/tagextractor"
+	adminusecase "github.com/fuju/backend/internal/usecase/admin"
+	badgeusecase "github.com/fuju/backend/internal/usecase/badge"
+	followusecase "github.com/fuju/backend/internal/usecase/follow"
 	imageusecase "github.com/fuju/backend/internal/usecase/image"
+	ogpusecase "github.com/fuju/backend/internal/usecase/ogp"
 	postusecase "github.com/fuju/backend/internal/usecase/post"
+	timelineusecase "github.com/fuju/backend/internal/usecase/timeline"
 	userusecase "github.com/fuju/backend/internal/usecase/user"
 	"github.com/fuju/backend/pkg/authcore"
 	"github.com/fuju/backend/pkg/logger"
+	"github.com/fuju/backend/pkg/ogp"
 	"github.com/fuju/backend/pkg/storage"
 )
 
@@ -49,10 +55,18 @@ func main() {
 		"environment", cfg.Environment,
 	)
 
-	// Repositories (in-memory for now).
+	// Repositories (in-memory for now). The LinkStore backs the
+	// post_images / post_tags cross-repo relations.
+	links := inmemory.NewLinkStore()
 	userRepo := inmemory.NewUserRepository()
-	postRepo := inmemory.NewPostRepository()
-	commentRepo := inmemory.NewCommentRepository()
+	postRepo := inmemory.NewPostRepository(links)
+	imageRepo := inmemory.NewImageRepository(links)
+	tagRepo := inmemory.NewTagRepository(links)
+	likeRepo := inmemory.NewLikeRepository()
+	badgeRepo := inmemory.NewBadgeRepository()
+	followRepo := inmemory.NewFollowRepository()
+	ogpCacheRepo := inmemory.NewOGPCacheRepository(links)
+	ogpJobQueue := inmemory.NewOGPJobQueue()
 
 	// AuthCore client + short-lived introspection cache.
 	authcoreClient := authcore.New(authcore.Options{
@@ -71,22 +85,51 @@ func main() {
 	userUpdateUC := userusecase.NewUpdateUserProfileUseCase(userRepo)
 	userListUC := userusecase.NewListUsersUseCase(userRepo)
 
-	postGetUC := postusecase.NewGetPostUseCase(postRepo)
-	postCreateUC := postusecase.NewCreatePostUseCase(postRepo)
-	postDeleteUC := postusecase.NewDeletePostUseCase(postRepo)
-	postListUC := postusecase.NewListPostsUseCase(postRepo)
+	// TagExtractor (MVP: regex + empty keyword dictionary). Keyword list
+	// ships empty for now; load from config when a dictionary source lands.
+	tagEx := tagextractor.NewRegexTagExtractor(nil)
 
-	commentAddUC := commentusecase.NewAddCommentUseCase(commentRepo, postRepo)
-	commentDeleteUC := commentusecase.NewDeleteCommentUseCase(commentRepo, postRepo)
+	postHydrator := postusecase.NewHydrator(imageRepo, tagRepo, likeRepo, userRepo, followRepo, ogpCacheRepo)
+
+	ogpEnqueuer := ogpusecase.NewEnqueuer(ogpCacheRepo, ogpJobQueue, postRepo, log)
+
+	postGetUC := postusecase.NewGetPostUseCase(postRepo, postHydrator)
+	postCreateUC := postusecase.
+		NewCreatePostUseCase(postRepo, imageRepo, tagRepo, tagEx).
+		WithCommitHook(ogpEnqueuer.EnqueueForPost)
+	postDeleteUC := postusecase.NewDeletePostUseCase(postRepo)
+	postListUC := postusecase.NewListPostsUseCase(postRepo, postHydrator)
+	postRepliesUC := postusecase.NewListRepliesUseCase(postRepo, postHydrator)
+	postLikeUC := postusecase.NewLikePostUseCase(postRepo, likeRepo)
+	postUnlikeUC := postusecase.NewUnlikePostUseCase(postRepo, likeRepo)
+
+	followUC := followusecase.NewUseCase(userRepo, followRepo)
+	unfollowUC := followusecase.NewUnfollowUseCase(userRepo, followRepo)
+	listFollowersUC := followusecase.NewListFollowersUseCase(userRepo, followRepo)
+	listFollowingUC := followusecase.NewListFollowingUseCase(userRepo, followRepo)
+
+	homeTimelineUC := timelineusecase.NewHomeTimelineUseCase(postRepo, followRepo, postHydrator)
+	userTimelineUC := timelineusecase.NewUserTimelineUseCase(postRepo, postHydrator)
+	globalTimelineUC := timelineusecase.NewGlobalTimelineUseCase(postRepo, postHydrator)
+
+	adminChecker := adminusecase.NewChecker(userRepo)
+	badgeGetUC := badgeusecase.NewGetUserBadgesUseCase(badgeRepo)
+	badgeBatchUC := badgeusecase.NewListUserBadgesBatchUseCase(badgeRepo)
+	badgeListUC := badgeusecase.NewListBadgesUseCase(badgeRepo)
+	badgeCreateUC := badgeusecase.NewCreateBadgeUseCase(badgeRepo, adminChecker)
+	badgeUpdateUC := badgeusecase.NewUpdateBadgeUseCase(badgeRepo, adminChecker)
+	badgeGrantUC := badgeusecase.NewGrantBadgeUseCase(badgeRepo, userRepo, adminChecker)
+	badgeRevokeUC := badgeusecase.NewRevokeBadgeUseCase(badgeRepo, adminChecker)
 
 	// Handlers
 	healthHandler := handler.NewHealthHandler()
-	userHandler := handler.NewUserHandler(userGetUC, userUpdateUC, userListUC, userHydrateUC)
-	postHandler := handler.NewPostHandler(postGetUC, postCreateUC, postDeleteUC, postListUC)
-	commentHandler := handler.NewCommentHandlerImpl(commentAddUC, commentDeleteUC)
+	userHandler := handler.NewUserHandler(userGetUC, userUpdateUC, userListUC, userHydrateUC, badgeGetUC, badgeBatchUC)
+	postHandler := handler.NewPostHandler(postGetUC, postCreateUC, postDeleteUC, postListUC, postRepliesUC, postLikeUC, postUnlikeUC)
+	badgeHandler := handler.NewBadgeHandler(badgeListUC, badgeCreateUC, badgeUpdateUC, badgeGrantUC, badgeRevokeUC)
+	followHandler := handler.NewFollowHandler(followUC, unfollowUC, listFollowersUC, listFollowingUC)
+	timelineHandler := handler.NewTimelineHandler(homeTimelineUC, userTimelineUC, globalTimelineUC)
 
 	// Optional R2 / image handlers.
-	imageRepo := inmemory.NewImageRepository()
 	r2Service, err := storage.NewR2Service()
 	if err != nil {
 		log.Warn(ctx, "Failed to initialize R2 service", err)
@@ -105,8 +148,12 @@ func main() {
 	// HydrateUserMiddleware (load / upsert user row).
 	authMW := middleware.AuthMiddleware(cachedAuthCore)
 	hydrateMW := middleware.HydrateUserMiddleware(userHydrateUC)
+	adminMW := middleware.AdminMiddleware()
 	authed := func(next http.Handler) http.Handler {
 		return authMW(hydrateMW(next))
+	}
+	adminOnly := func(next http.Handler) http.Handler {
+		return authMW(hydrateMW(adminMW(next)))
 	}
 
 	mux := http.NewServeMux()
@@ -122,15 +169,16 @@ func main() {
 	mux.HandleFunc("GET /users/{sub}", userHandler.GetUser)
 	mux.Handle("PUT /users/{sub}", authed(http.HandlerFunc(userHandler.UpdateUser)))
 
-	// Posts
+	// Posts. Authenticated routes run through the auth chain so the
+	// handler can read viewerSub via auth.GetSubFromContext for public
+	// reads; unauthenticated GETs simply see no sub on the context.
 	mux.HandleFunc("GET /posts", postHandler.ListPosts)
 	mux.Handle("POST /posts", authed(http.HandlerFunc(postHandler.CreatePost)))
 	mux.HandleFunc("GET /posts/{id}", postHandler.GetPost)
+	mux.HandleFunc("GET /posts/{id}/replies", postHandler.ListReplies)
 	mux.Handle("DELETE /posts/{id}", authed(http.HandlerFunc(postHandler.DeletePost)))
-
-	// Comments
-	mux.Handle("POST /posts/{id}/comments", authed(http.HandlerFunc(commentHandler.AddComment)))
-	mux.Handle("DELETE /posts/{post_id}/comments/{comment_id}", authed(http.HandlerFunc(commentHandler.DeleteComment)))
+	mux.Handle("POST /posts/{id}/like", authed(http.HandlerFunc(postHandler.LikePost)))
+	mux.Handle("DELETE /posts/{id}/like", authed(http.HandlerFunc(postHandler.UnlikePost)))
 
 	// Images (only if R2 configured)
 	if imageHandler != nil {
@@ -138,6 +186,26 @@ func main() {
 		mux.Handle("GET /v1/images", authed(http.HandlerFunc(imageHandler.GetUserImages)))
 		mux.Handle("DELETE /v1/images/{id}", authed(http.HandlerFunc(imageHandler.DeleteImage)))
 	}
+
+	// Follow / followers / following. Public reads, authenticated writes.
+	mux.Handle("POST /users/{sub}/follow", authed(http.HandlerFunc(followHandler.Follow)))
+	mux.Handle("DELETE /users/{sub}/follow", authed(http.HandlerFunc(followHandler.Unfollow)))
+	mux.HandleFunc("GET /users/{sub}/followers", followHandler.ListFollowers)
+	mux.HandleFunc("GET /users/{sub}/following", followHandler.ListFollowing)
+
+	// Timelines. Home requires auth; user/global are public (viewer
+	// context is optional and, when present, populates liked_by_viewer
+	// and following_author on each post).
+	mux.Handle("GET /timeline/home", authed(http.HandlerFunc(timelineHandler.Home)))
+	mux.HandleFunc("GET /timeline/user/{sub}", timelineHandler.User)
+	mux.HandleFunc("GET /timeline/global", timelineHandler.Global)
+
+	// Admin badges
+	mux.Handle("GET /v1/admin/badges", adminOnly(http.HandlerFunc(badgeHandler.ListBadges)))
+	mux.Handle("POST /v1/admin/badges", adminOnly(http.HandlerFunc(badgeHandler.CreateBadge)))
+	mux.Handle("PUT /v1/admin/badges/{id}", adminOnly(http.HandlerFunc(badgeHandler.UpdateBadge)))
+	mux.Handle("POST /v1/admin/users/{sub}/badges", adminOnly(http.HandlerFunc(badgeHandler.GrantBadge)))
+	mux.Handle("DELETE /v1/admin/users/{sub}/badges/{badge_id}", adminOnly(http.HandlerFunc(badgeHandler.RevokeBadge)))
 
 	var apiHandler http.Handler = mux
 	apiHandler = middleware.CORSMiddleware(cfg.CORSAllowedOrigins)(apiHandler)
@@ -166,6 +234,16 @@ func main() {
 		}
 	}()
 
+	// OGP background worker. Tied to the background context that is
+	// cancelled at shutdown so the goroutine exits cleanly.
+	ogpFetcher := ogp.NewFetcher(&ogp.Options{UserAgent: cfg.OGPUserAgent})
+	ogpWorker := ogpusecase.NewWorker(ogpJobQueue, ogpCacheRepo, postRepo, ogpFetcher, log)
+	go func() {
+		log.Info(ctx, "OGP worker started")
+		ogpWorker.Run(ctx)
+		log.Info(ctx, "OGP worker stopped")
+	}()
+
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
@@ -179,6 +257,9 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Error(shutdownCtx, "Server shutdown error", err)
 	}
+
+	// Cancel the background context so the OGP worker exits.
+	cancelBackground()
 
 	log.Info(ctx, "Server stopped")
 }

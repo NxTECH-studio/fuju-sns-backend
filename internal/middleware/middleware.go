@@ -108,6 +108,26 @@ func extractBearerToken(header string) (string, bool) {
 	return parts[1], true
 }
 
+// AdminMiddleware requires the request's current user to have is_admin=true.
+// It must run after AuthMiddleware + HydrateUserMiddleware so the user has
+// been loaded onto the context.
+func AdminMiddleware() func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			user, ok := auth.GetCurrentUserFromContext(r.Context())
+			if !ok {
+				writeAuthError(w, http.StatusUnauthorized, errors.ErrUnauthorized, "authentication required")
+				return
+			}
+			if !user.IsAdmin {
+				writeAuthError(w, http.StatusForbidden, errors.ErrForbidden, "admin privilege required")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // HydrateUserMiddleware runs after AuthMiddleware and materialises the
 // hydrated User onto the context.
 func HydrateUserMiddleware(uc *userusecase.GetOrHydrateUserUseCase) func(http.Handler) http.Handler {
