@@ -17,15 +17,6 @@ const DefaultPageLimit = 20
 // MaxPageLimit caps the per-request list size.
 const MaxPageLimit = 50
 
-// PostDetail bundles a Post with its images, tags, and per-viewer liked
-// flag for handler responses.
-type PostDetail struct {
-	Post          *domain.Post
-	Images        []*domain.Image
-	Tags          []*domain.Tag
-	LikedByViewer bool
-}
-
 // CreatePostUseCase creates a post with optional images and a parent
 // reply reference. Tag extraction is delegated to a TagExtractor.
 type CreatePostUseCase struct {
@@ -139,23 +130,16 @@ func (uc *CreatePostUseCase) Execute(ctx context.Context, userSub string, req *d
 	return &PostDetail{Post: created, Images: images, Tags: tags}, nil
 }
 
-// GetPostUseCase retrieves a post with its images, tags, and the viewer's
-// liked flag.
+// GetPostUseCase retrieves a post hydrated with its images, tags,
+// author, and per-viewer liked / following flags.
 type GetPostUseCase struct {
-	postRepo  repository.PostRepository
-	imageRepo repository.ImageRepository
-	tagRepo   repository.TagRepository
-	likeRepo  repository.LikeRepository
+	postRepo repository.PostRepository
+	hydrator *Hydrator
 }
 
 // NewGetPostUseCase constructs a GetPostUseCase.
-func NewGetPostUseCase(
-	postRepo repository.PostRepository,
-	imageRepo repository.ImageRepository,
-	tagRepo repository.TagRepository,
-	likeRepo repository.LikeRepository,
-) *GetPostUseCase {
-	return &GetPostUseCase{postRepo: postRepo, imageRepo: imageRepo, tagRepo: tagRepo, likeRepo: likeRepo}
+func NewGetPostUseCase(postRepo repository.PostRepository, hydrator *Hydrator) *GetPostUseCase {
+	return &GetPostUseCase{postRepo: postRepo, hydrator: hydrator}
 }
 
 // Execute returns a single PostDetail. viewerSub may be nil (anonymous).
@@ -170,22 +154,7 @@ func (uc *GetPostUseCase) Execute(ctx context.Context, postID string, viewerSub 
 	if post == nil {
 		return nil, errors.NotFound("post not found")
 	}
-	images, err := uc.imageRepo.ListByPostID(ctx, postID)
-	if err != nil {
-		return nil, errors.DatabaseError("failed to load post images", err)
-	}
-	tags, err := uc.tagRepo.ListByPostID(ctx, postID)
-	if err != nil {
-		return nil, errors.DatabaseError("failed to load post tags", err)
-	}
-	liked := false
-	if viewerSub != nil && *viewerSub != "" {
-		liked, err = uc.likeRepo.IsLikedBy(ctx, *viewerSub, postID)
-		if err != nil {
-			return nil, errors.DatabaseError("failed to load like state", err)
-		}
-	}
-	return &PostDetail{Post: post, Images: images, Tags: tags, LikedByViewer: liked}, nil
+	return uc.hydrator.HydrateOne(ctx, post, viewerSub)
 }
 
 // DeletePostUseCase soft-deletes a post. Only the author may delete.
@@ -225,99 +194,42 @@ func (uc *DeletePostUseCase) Execute(ctx context.Context, postID, userSub string
 	return nil
 }
 
-// hydratePosts fans out image / tag / like lookups in batches (N+1
-// avoidance) and packs the results into PostDetail. Shared by every feed
-// use case (main feed, replies, follow timeline later).
-func hydratePosts(
-	ctx context.Context,
-	imageRepo repository.ImageRepository,
-	tagRepo repository.TagRepository,
-	likeRepo repository.LikeRepository,
-	posts []*domain.Post,
-	nextCursor string,
-	viewerSub *string,
-) ([]*PostDetail, string, error) {
-	if len(posts) == 0 {
-		return []*PostDetail{}, "", nil
-	}
-	ids := make([]string, len(posts))
-	for i, p := range posts {
-		ids[i] = p.ID
-	}
-	imagesByPost, err := imageRepo.ListByPostIDs(ctx, ids)
-	if err != nil {
-		return nil, "", errors.DatabaseError("failed to load images", err)
-	}
-	tagsByPost, err := tagRepo.ListByPostIDs(ctx, ids)
-	if err != nil {
-		return nil, "", errors.DatabaseError("failed to load tags", err)
-	}
-	var likedByMe map[string]bool
-	if viewerSub != nil && *viewerSub != "" {
-		likedByMe, err = likeRepo.ListLikedPostIDsByUser(ctx, *viewerSub, ids)
-		if err != nil {
-			return nil, "", errors.DatabaseError("failed to load like state", err)
-		}
-	}
-
-	out := make([]*PostDetail, len(posts))
-	for i, p := range posts {
-		out[i] = &PostDetail{
-			Post:          p,
-			Images:        imagesByPost[p.ID],
-			Tags:          tagsByPost[p.ID],
-			LikedByViewer: likedByMe[p.ID],
-		}
-	}
-	return out, nextCursor, nil
-}
-
 // ListPostsUseCase returns a cursor-paginated feed of posts. userID filters
 // to a single author; viewerSub enables per-post likedByViewer.
 type ListPostsUseCase struct {
-	postRepo  repository.PostRepository
-	imageRepo repository.ImageRepository
-	tagRepo   repository.TagRepository
-	likeRepo  repository.LikeRepository
+	postRepo repository.PostRepository
+	hydrator *Hydrator
 }
 
 // NewListPostsUseCase constructs a ListPostsUseCase.
-func NewListPostsUseCase(
-	postRepo repository.PostRepository,
-	imageRepo repository.ImageRepository,
-	tagRepo repository.TagRepository,
-	likeRepo repository.LikeRepository,
-) *ListPostsUseCase {
-	return &ListPostsUseCase{postRepo: postRepo, imageRepo: imageRepo, tagRepo: tagRepo, likeRepo: likeRepo}
+func NewListPostsUseCase(postRepo repository.PostRepository, hydrator *Hydrator) *ListPostsUseCase {
+	return &ListPostsUseCase{postRepo: postRepo, hydrator: hydrator}
 }
 
 // Execute returns a page of PostDetail and the next cursor (empty string
 // when there are no more rows).
 func (uc *ListPostsUseCase) Execute(ctx context.Context, userID *string, cursor *string, limit int, viewerSub *string) ([]*PostDetail, string, error) {
-	limit = normalizeLimit(limit)
+	limit = NormalizeLimit(limit)
 	posts, nextCursor, err := uc.postRepo.List(ctx, userID, cursor, limit)
 	if err != nil {
 		return nil, "", errors.DatabaseError("failed to list posts", err)
 	}
-	return hydratePosts(ctx, uc.imageRepo, uc.tagRepo, uc.likeRepo, posts, nextCursor, viewerSub)
+	details, err := uc.hydrator.Hydrate(ctx, posts, viewerSub)
+	if err != nil {
+		return nil, "", err
+	}
+	return details, nextCursor, nil
 }
 
 // ListRepliesUseCase returns a cursor-paginated list of a post's replies.
 type ListRepliesUseCase struct {
-	postRepo  repository.PostRepository
-	imageRepo repository.ImageRepository
-	tagRepo   repository.TagRepository
-	likeRepo  repository.LikeRepository
+	postRepo repository.PostRepository
+	hydrator *Hydrator
 }
 
 // NewListRepliesUseCase constructs a ListRepliesUseCase.
-func NewListRepliesUseCase(
-	postRepo repository.PostRepository,
-	imageRepo repository.ImageRepository,
-	tagRepo repository.TagRepository,
-	likeRepo repository.LikeRepository,
-) *ListRepliesUseCase {
-	return &ListRepliesUseCase{postRepo: postRepo, imageRepo: imageRepo, tagRepo: tagRepo, likeRepo: likeRepo}
+func NewListRepliesUseCase(postRepo repository.PostRepository, hydrator *Hydrator) *ListRepliesUseCase {
+	return &ListRepliesUseCase{postRepo: postRepo, hydrator: hydrator}
 }
 
 // Execute returns direct replies of postID.
@@ -325,12 +237,16 @@ func (uc *ListRepliesUseCase) Execute(ctx context.Context, postID string, cursor
 	if postID == "" {
 		return nil, "", errors.InvalidRequest("post id is required", nil)
 	}
-	limit = normalizeLimit(limit)
+	limit = NormalizeLimit(limit)
 	posts, nextCursor, err := uc.postRepo.ListReplies(ctx, postID, cursor, limit)
 	if err != nil {
 		return nil, "", errors.DatabaseError("failed to list replies", err)
 	}
-	return hydratePosts(ctx, uc.imageRepo, uc.tagRepo, uc.likeRepo, posts, nextCursor, viewerSub)
+	details, err := uc.hydrator.Hydrate(ctx, posts, viewerSub)
+	if err != nil {
+		return nil, "", err
+	}
+	return details, nextCursor, nil
 }
 
 // LikePostUseCase marks a post as liked by the caller (idempotent).
@@ -403,7 +319,10 @@ func (uc *UnlikePostUseCase) Execute(ctx context.Context, userSub, postID string
 	return nil
 }
 
-func normalizeLimit(limit int) int {
+// NormalizeLimit clamps a user-supplied limit to the package's
+// [1, MaxPageLimit] range, falling back to DefaultPageLimit on out-of-range
+// values. Exported so the timeline usecases can reuse the same policy.
+func NormalizeLimit(limit int) int {
 	if limit <= 0 || limit > MaxPageLimit {
 		return DefaultPageLimit
 	}

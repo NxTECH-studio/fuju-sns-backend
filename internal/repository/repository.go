@@ -26,8 +26,50 @@ type UserRepository interface {
 	// List retrieves a paginated list of users.
 	List(ctx context.Context, limit, offset int) ([]*domain.User, int, error)
 
+	// ListBySubs returns a map keyed by sub for batched author lookups
+	// (timeline / post hydration). Missing subs are absent from the map.
+	ListBySubs(ctx context.Context, subs []string) (map[string]*domain.User, error)
+
+	// Follow counter mutators. The follow usecase calls these exactly
+	// once per (idempotent) state transition.
+	IncrementFollowersCount(ctx context.Context, sub string) error
+	DecrementFollowersCount(ctx context.Context, sub string) error
+	IncrementFollowingCount(ctx context.Context, sub string) error
+	DecrementFollowingCount(ctx context.Context, sub string) error
+
 	// Delete soft-deletes a user.
 	Delete(ctx context.Context, sub string) error
+}
+
+// FollowRepository defines persistence for directed follow relations.
+// Create and Delete are idempotent: the boolean return signals whether the
+// row state actually changed so the caller only adjusts the denormalized
+// counters on the 0↔1 transition.
+//
+// List cursors use the composite-key format
+//
+//	base64url(RFC3339Nano(created_at) + "|" + peer_sub)
+//
+// where peer_sub is follower_sub for ListFollowers and followee_sub for
+// ListFollowing. Ordering is (created_at DESC, peer_sub DESC). Rows strictly
+// less than the cursor are returned. An empty returned nextCursor means no
+// more results.
+type FollowRepository interface {
+	Create(ctx context.Context, followerSub, followeeSub string) (bool, error)
+	Delete(ctx context.Context, followerSub, followeeSub string) (bool, error)
+	IsFollowing(ctx context.Context, followerSub, followeeSub string) (bool, error)
+
+	// ListFollowingSubs returns every sub that followerSub follows. Used
+	// to compute the home timeline author set in a single fan-out.
+	ListFollowingSubs(ctx context.Context, followerSub string) ([]string, error)
+
+	ListFollowers(ctx context.Context, sub string, cursor *string, limit int) ([]*domain.Follow, string, error)
+	ListFollowing(ctx context.Context, sub string, cursor *string, limit int) ([]*domain.Follow, string, error)
+
+	// AreFollowing batches the "does the viewer follow each target?"
+	// question for post hydration. Unfollowed targets are absent from the
+	// returned map.
+	AreFollowing(ctx context.Context, viewerSub string, targetSubs []string) (map[string]bool, error)
 }
 
 // PostRepository defines post persistence operations. All list methods use

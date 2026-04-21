@@ -3,7 +3,9 @@ package inmemory
 
 import (
 	"context"
+	"encoding/base64"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,6 +58,10 @@ func (r *UserRepository) Upsert(_ context.Context, user *domain.User) (*domain.U
 		stored.IsAdmin = existing.IsAdmin
 		stored.CreatedAt = existing.CreatedAt
 		stored.DeletedAt = existing.DeletedAt
+		// Counters are maintained by the follow usecases; never let a
+		// profile-refresh Upsert trample them.
+		stored.FollowersCount = existing.FollowersCount
+		stored.FollowingCount = existing.FollowingCount
 		// Preserve SNS-owned fields when the caller did not overwrite them.
 		if stored.Bio == "" {
 			stored.Bio = existing.Bio
@@ -119,6 +125,64 @@ func (r *UserRepository) List(_ context.Context, limit, offset int) ([]*domain.U
 	}
 
 	return users[offset:end], total, nil
+}
+
+// ListBySubs returns the live user rows for subs, keyed by sub. Soft-deleted
+// rows and unknown subs are absent from the map.
+func (r *UserRepository) ListBySubs(_ context.Context, subs []string) (map[string]*domain.User, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[string]*domain.User, len(subs))
+	for _, sub := range subs {
+		u, ok := r.users[sub]
+		if !ok || u.DeletedAt != nil {
+			continue
+		}
+		uc := *u
+		out[sub] = &uc
+	}
+	return out, nil
+}
+
+// IncrementFollowersCount bumps the denormalized counter. No-op when the
+// user does not exist.
+func (r *UserRepository) IncrementFollowersCount(_ context.Context, sub string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if u, ok := r.users[sub]; ok {
+		u.FollowersCount++
+	}
+	return nil
+}
+
+// DecrementFollowersCount floors the counter at 0.
+func (r *UserRepository) DecrementFollowersCount(_ context.Context, sub string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if u, ok := r.users[sub]; ok && u.FollowersCount > 0 {
+		u.FollowersCount--
+	}
+	return nil
+}
+
+// IncrementFollowingCount bumps the denormalized counter.
+func (r *UserRepository) IncrementFollowingCount(_ context.Context, sub string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if u, ok := r.users[sub]; ok {
+		u.FollowingCount++
+	}
+	return nil
+}
+
+// DecrementFollowingCount floors the counter at 0.
+func (r *UserRepository) DecrementFollowingCount(_ context.Context, sub string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if u, ok := r.users[sub]; ok && u.FollowingCount > 0 {
+		u.FollowingCount--
+	}
+	return nil
 }
 
 // Delete soft-deletes a user.
@@ -883,4 +947,215 @@ func sortBadgesByPriority(badges []*domain.Badge) {
 		}
 		return badges[i].Key < badges[j].Key
 	})
+}
+
+// followKey is the composite primary key of the follows table.
+type followKey struct {
+	follower string
+	followee string
+}
+
+// FollowRepository is an in-memory implementation of FollowRepository.
+// Ordering of ListFollowers / ListFollowing matches the SQL impl:
+// (created_at DESC, peer DESC), cursor-paginated.
+type FollowRepository struct {
+	mu      sync.RWMutex
+	follows map[followKey]*domain.Follow
+}
+
+// NewFollowRepository creates a new in-memory follow repository.
+func NewFollowRepository() repository.FollowRepository {
+	return &FollowRepository{follows: make(map[followKey]*domain.Follow)}
+}
+
+// Create inserts a follow row. Returns (true, nil) on a new row, (false,
+// nil) when the pair already exists.
+func (r *FollowRepository) Create(_ context.Context, followerSub, followeeSub string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	k := followKey{follower: followerSub, followee: followeeSub}
+	if _, exists := r.follows[k]; exists {
+		return false, nil
+	}
+	r.follows[k] = &domain.Follow{
+		FollowerSub: followerSub,
+		FolloweeSub: followeeSub,
+		CreatedAt:   time.Now(),
+	}
+	return true, nil
+}
+
+// Delete removes a follow row. Returns (true, nil) on a deletion, (false,
+// nil) when no row existed.
+func (r *FollowRepository) Delete(_ context.Context, followerSub, followeeSub string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	k := followKey{follower: followerSub, followee: followeeSub}
+	if _, exists := r.follows[k]; !exists {
+		return false, nil
+	}
+	delete(r.follows, k)
+	return true, nil
+}
+
+// IsFollowing reports whether followerSub follows followeeSub.
+func (r *FollowRepository) IsFollowing(_ context.Context, followerSub, followeeSub string) (bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, exists := r.follows[followKey{follower: followerSub, followee: followeeSub}]
+	return exists, nil
+}
+
+// ListFollowingSubs returns every followee_sub for followerSub, in
+// arbitrary order (callers that need a specific order re-sort).
+func (r *FollowRepository) ListFollowingSubs(_ context.Context, followerSub string) ([]string, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []string
+	for k := range r.follows {
+		if k.follower == followerSub {
+			out = append(out, k.followee)
+		}
+	}
+	return out, nil
+}
+
+// ListFollowers returns rows where followee_sub == sub. peer for the
+// cursor is follower_sub.
+func (r *FollowRepository) ListFollowers(_ context.Context, sub string, cursor *string, limit int) ([]*domain.Follow, string, error) {
+	return r.listSide(sub, cursor, limit, true)
+}
+
+// ListFollowing returns rows where follower_sub == sub. peer for the
+// cursor is followee_sub.
+func (r *FollowRepository) ListFollowing(_ context.Context, sub string, cursor *string, limit int) ([]*domain.Follow, string, error) {
+	return r.listSide(sub, cursor, limit, false)
+}
+
+// listSide is the shared implementation for ListFollowers (followersSide
+// = true, filter on followee_sub) and ListFollowing (false, filter on
+// follower_sub). Results are ordered (created_at DESC, peer DESC) and
+// cursor-paginated.
+func (r *FollowRepository) listSide(sub string, cursor *string, limit int, followersSide bool) ([]*domain.Follow, string, error) {
+	if limit <= 0 {
+		return nil, "", nil
+	}
+
+	cursorTime, cursorPeer, ok := decodeFollowCursor(cursor)
+	if cursor != nil && !ok {
+		// Malformed cursor — treat as "start from the top" to match how
+		// the post handler tolerates an unparseable cursor.
+		cursorTime = time.Time{}
+		cursorPeer = ""
+	}
+
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	matches := make([]*domain.Follow, 0)
+	for k, f := range r.follows {
+		if followersSide && k.followee != sub {
+			continue
+		}
+		if !followersSide && k.follower != sub {
+			continue
+		}
+		peer := k.follower
+		if !followersSide {
+			peer = k.followee
+		}
+		if cursor != nil && ok {
+			if !isBefore(f.CreatedAt, peer, cursorTime, cursorPeer) {
+				continue
+			}
+		}
+		fc := *f
+		matches = append(matches, &fc)
+	}
+
+	sort.Slice(matches, func(i, j int) bool {
+		ci, cj := matches[i].CreatedAt, matches[j].CreatedAt
+		if !ci.Equal(cj) {
+			return ci.After(cj)
+		}
+		pi, pj := peerSub(matches[i], followersSide), peerSub(matches[j], followersSide)
+		return pi > pj
+	})
+
+	if len(matches) <= limit {
+		return matches, "", nil
+	}
+	page := matches[:limit]
+	last := page[limit-1]
+	next := encodeFollowCursor(last.CreatedAt, peerSub(last, followersSide))
+	return page, next, nil
+}
+
+// AreFollowing reports which of targetSubs the viewer follows. Unfollowed
+// targets are absent from the returned map.
+func (r *FollowRepository) AreFollowing(_ context.Context, viewerSub string, targetSubs []string) (map[string]bool, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[string]bool, len(targetSubs))
+	for _, t := range targetSubs {
+		if _, ok := r.follows[followKey{follower: viewerSub, followee: t}]; ok {
+			out[t] = true
+		}
+	}
+	return out, nil
+}
+
+// peerSub returns follower_sub for a followers listing and followee_sub
+// for a following listing — i.e. the "other party" relative to the owner
+// of the list.
+func peerSub(f *domain.Follow, followersSide bool) string {
+	if followersSide {
+		return f.FollowerSub
+	}
+	return f.FolloweeSub
+}
+
+// isBefore reports whether (t, p) sorts strictly before (ct, cp) under
+// (created_at DESC, peer DESC) — i.e. the row should appear *after* the
+// cursor and therefore be returned.
+func isBefore(t time.Time, p string, ct time.Time, cp string) bool {
+	if !t.Equal(ct) {
+		return t.Before(ct)
+	}
+	return p < cp
+}
+
+// encodeFollowCursor produces the cursor string used by ListFollowers /
+// ListFollowing. The separator "|" cannot occur in RFC3339Nano nor in a
+// ULID, so splitting on the first "|" is unambiguous.
+func encodeFollowCursor(t time.Time, peer string) string {
+	raw := t.UTC().Format(time.RFC3339Nano) + "|" + peer
+	return base64.RawURLEncoding.EncodeToString([]byte(raw))
+}
+
+// decodeFollowCursor reverses encodeFollowCursor. Returns ok=false for a
+// nil cursor, bad base64, a missing separator, or an unparseable time.
+func decodeFollowCursor(cursor *string) (time.Time, string, bool) {
+	if cursor == nil || *cursor == "" {
+		return time.Time{}, "", false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(*cursor)
+	if err != nil {
+		return time.Time{}, "", false
+	}
+	idx := strings.IndexByte(string(raw), '|')
+	if idx <= 0 || idx == len(raw)-1 {
+		return time.Time{}, "", false
+	}
+	t, err := time.Parse(time.RFC3339Nano, string(raw[:idx]))
+	if err != nil {
+		return time.Time{}, "", false
+	}
+	return t, string(raw[idx+1:]), true
+}
+
+// EncodeFollowCursor exposes the cursor encoder for handler tests and for
+// callers that need to build a cursor from a known (time, peer) pair.
+func EncodeFollowCursor(t time.Time, peer string) string {
+	return encodeFollowCursor(t, peer)
 }

@@ -17,8 +17,10 @@ import (
 	"github.com/fuju/backend/internal/tagextractor"
 	adminusecase "github.com/fuju/backend/internal/usecase/admin"
 	badgeusecase "github.com/fuju/backend/internal/usecase/badge"
+	followusecase "github.com/fuju/backend/internal/usecase/follow"
 	imageusecase "github.com/fuju/backend/internal/usecase/image"
 	postusecase "github.com/fuju/backend/internal/usecase/post"
+	timelineusecase "github.com/fuju/backend/internal/usecase/timeline"
 	userusecase "github.com/fuju/backend/internal/usecase/user"
 	"github.com/fuju/backend/pkg/authcore"
 	"github.com/fuju/backend/pkg/logger"
@@ -56,6 +58,7 @@ func main() {
 	tagRepo := inmemory.NewTagRepository(links)
 	likeRepo := inmemory.NewLikeRepository()
 	badgeRepo := inmemory.NewBadgeRepository()
+	followRepo := inmemory.NewFollowRepository()
 
 	// AuthCore client + short-lived introspection cache.
 	authcoreClient := authcore.New(authcore.Options{
@@ -78,13 +81,24 @@ func main() {
 	// ships empty for now; load from config when a dictionary source lands.
 	tagEx := tagextractor.NewRegexTagExtractor(nil)
 
-	postGetUC := postusecase.NewGetPostUseCase(postRepo, imageRepo, tagRepo, likeRepo)
+	postHydrator := postusecase.NewHydrator(imageRepo, tagRepo, likeRepo, userRepo, followRepo)
+
+	postGetUC := postusecase.NewGetPostUseCase(postRepo, postHydrator)
 	postCreateUC := postusecase.NewCreatePostUseCase(postRepo, imageRepo, tagRepo, tagEx)
 	postDeleteUC := postusecase.NewDeletePostUseCase(postRepo)
-	postListUC := postusecase.NewListPostsUseCase(postRepo, imageRepo, tagRepo, likeRepo)
-	postRepliesUC := postusecase.NewListRepliesUseCase(postRepo, imageRepo, tagRepo, likeRepo)
+	postListUC := postusecase.NewListPostsUseCase(postRepo, postHydrator)
+	postRepliesUC := postusecase.NewListRepliesUseCase(postRepo, postHydrator)
 	postLikeUC := postusecase.NewLikePostUseCase(postRepo, likeRepo)
 	postUnlikeUC := postusecase.NewUnlikePostUseCase(postRepo, likeRepo)
+
+	followUC := followusecase.NewFollowUseCase(userRepo, followRepo)
+	unfollowUC := followusecase.NewUnfollowUseCase(userRepo, followRepo)
+	listFollowersUC := followusecase.NewListFollowersUseCase(userRepo, followRepo)
+	listFollowingUC := followusecase.NewListFollowingUseCase(userRepo, followRepo)
+
+	homeTimelineUC := timelineusecase.NewHomeTimelineUseCase(postRepo, followRepo, postHydrator)
+	userTimelineUC := timelineusecase.NewUserTimelineUseCase(postRepo, postHydrator)
+	globalTimelineUC := timelineusecase.NewGlobalTimelineUseCase(postRepo, postHydrator)
 
 	adminChecker := adminusecase.NewChecker(userRepo)
 	badgeGetUC := badgeusecase.NewGetUserBadgesUseCase(badgeRepo)
@@ -100,6 +114,8 @@ func main() {
 	userHandler := handler.NewUserHandler(userGetUC, userUpdateUC, userListUC, userHydrateUC, badgeGetUC, badgeBatchUC)
 	postHandler := handler.NewPostHandler(postGetUC, postCreateUC, postDeleteUC, postListUC, postRepliesUC, postLikeUC, postUnlikeUC)
 	badgeHandler := handler.NewBadgeHandler(badgeListUC, badgeCreateUC, badgeUpdateUC, badgeGrantUC, badgeRevokeUC)
+	followHandler := handler.NewFollowHandler(followUC, unfollowUC, listFollowersUC, listFollowingUC)
+	timelineHandler := handler.NewTimelineHandler(homeTimelineUC, userTimelineUC, globalTimelineUC)
 
 	// Optional R2 / image handlers.
 	r2Service, err := storage.NewR2Service()
@@ -158,6 +174,19 @@ func main() {
 		mux.Handle("GET /v1/images", authed(http.HandlerFunc(imageHandler.GetUserImages)))
 		mux.Handle("DELETE /v1/images/{id}", authed(http.HandlerFunc(imageHandler.DeleteImage)))
 	}
+
+	// Follow / followers / following. Public reads, authenticated writes.
+	mux.Handle("POST /users/{sub}/follow", authed(http.HandlerFunc(followHandler.Follow)))
+	mux.Handle("DELETE /users/{sub}/follow", authed(http.HandlerFunc(followHandler.Unfollow)))
+	mux.HandleFunc("GET /users/{sub}/followers", followHandler.ListFollowers)
+	mux.HandleFunc("GET /users/{sub}/following", followHandler.ListFollowing)
+
+	// Timelines. Home requires auth; user/global are public (viewer
+	// context is optional and, when present, populates liked_by_viewer
+	// and following_author on each post).
+	mux.Handle("GET /timeline/home", authed(http.HandlerFunc(timelineHandler.Home)))
+	mux.HandleFunc("GET /timeline/user/{sub}", timelineHandler.User)
+	mux.HandleFunc("GET /timeline/global", timelineHandler.Global)
 
 	// Admin badges
 	mux.Handle("GET /v1/admin/badges", adminOnly(http.HandlerFunc(badgeHandler.ListBadges)))

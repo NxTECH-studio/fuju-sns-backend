@@ -62,22 +62,33 @@ type postTagView struct {
 	Name string `json:"name"`
 }
 
+// postAuthorView is the author sub-object on a post response. Only the
+// fields the UI needs for an avatar + handle on a feed card.
+type postAuthorView struct {
+	Sub               string `json:"sub"`
+	DisplayNameCached string `json:"display_name_cached"`
+	DisplayIDCached   string `json:"display_id_cached"`
+	IconURLCached     string `json:"icon_url_cached"`
+}
+
 // postDetailView is the JSON response shape for a single post (with its
-// images, tags, and viewer-liked flag).
+// images, tags, author, and viewer-liked / viewer-following flags).
 type postDetailView struct {
-	ID            string          `json:"id"`
-	UserID        string          `json:"user_id"`
-	Content       string          `json:"content"`
-	ParentPostID  *string         `json:"parent_post_id"`
-	RootPostID    *string         `json:"root_post_id"`
-	LikesCount    int64           `json:"likes_count"`
-	RepliesCount  int64           `json:"replies_count"`
-	Visibility    string          `json:"visibility"`
-	CreatedAt     string          `json:"created_at"`
-	UpdatedAt     string          `json:"updated_at"`
-	Images        []postImageView `json:"images"`
-	Tags          []postTagView   `json:"tags"`
-	LikedByViewer bool            `json:"liked_by_viewer"`
+	ID              string          `json:"id"`
+	UserID          string          `json:"user_id"`
+	Content         string          `json:"content"`
+	ParentPostID    *string         `json:"parent_post_id"`
+	RootPostID      *string         `json:"root_post_id"`
+	LikesCount      int64           `json:"likes_count"`
+	RepliesCount    int64           `json:"replies_count"`
+	Visibility      string          `json:"visibility"`
+	CreatedAt       string          `json:"created_at"`
+	UpdatedAt       string          `json:"updated_at"`
+	Images          []postImageView `json:"images"`
+	Tags            []postTagView   `json:"tags"`
+	Author          *postAuthorView `json:"author"`
+	LikedByViewer   bool            `json:"liked_by_viewer"`
+	FollowingAuthor bool            `json:"following_author"`
 }
 
 func toPostDetailView(d *postusecase.PostDetail) postDetailView {
@@ -89,20 +100,31 @@ func toPostDetailView(d *postusecase.PostDetail) postDetailView {
 	for i, t := range d.Tags {
 		tags[i] = postTagView{ID: t.ID, Name: t.Name}
 	}
+	var author *postAuthorView
+	if d.Author != nil {
+		author = &postAuthorView{
+			Sub:               d.Author.Sub,
+			DisplayNameCached: d.Author.DisplayNameCached,
+			DisplayIDCached:   d.Author.DisplayIDCached,
+			IconURLCached:     d.Author.IconURLCached,
+		}
+	}
 	return postDetailView{
-		ID:            d.Post.ID,
-		UserID:        d.Post.UserID,
-		Content:       d.Post.Content,
-		ParentPostID:  d.Post.ParentPostID,
-		RootPostID:    d.Post.RootPostID,
-		LikesCount:    d.Post.LikesCount,
-		RepliesCount:  d.Post.RepliesCount,
-		Visibility:    d.Post.Visibility,
-		CreatedAt:     d.Post.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
-		UpdatedAt:     d.Post.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
-		Images:        images,
-		Tags:          tags,
-		LikedByViewer: d.LikedByViewer,
+		ID:              d.Post.ID,
+		UserID:          d.Post.UserID,
+		Content:         d.Post.Content,
+		ParentPostID:    d.Post.ParentPostID,
+		RootPostID:      d.Post.RootPostID,
+		LikesCount:      d.Post.LikesCount,
+		RepliesCount:    d.Post.RepliesCount,
+		Visibility:      d.Post.Visibility,
+		CreatedAt:       d.Post.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		UpdatedAt:       d.Post.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		Images:          images,
+		Tags:            tags,
+		Author:          author,
+		LikedByViewer:   d.LikedByViewer,
+		FollowingAuthor: d.FollowingAuthor,
 	}
 }
 
