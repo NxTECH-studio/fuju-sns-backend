@@ -70,7 +70,7 @@
 
 ### 変更
 
-- `cmd/server/main.go` — 54-65 行目の inmemory 直呼び出しを、設定値で分岐する factory 経由に置き換え。`DATABASE_URL` があれば postgres 実装を、無ければ inmemory 実装を選択（default 挙動は `[未確定]`、Step 0 で確定）。
+- `cmd/server/main.go` — 54-65 行目の inmemory 直呼び出しを、設定値で分岐する factory 経由に置き換え。`REPO_BACKEND` 明示指定を最優先、未指定時は `Environment == "development"` なら inmemory、それ以外は postgres を選択（Step 0-2 案 Z 確定）。
 - `config/config.go` — `DBHost` / `DBPort` / `DBName` / `DBUser` / `DBPassword` を Go プロセスで利用するようにコメントアウトを解除し、`DATABASE_URL` 形式に組み立てるヘルパー `DSN()` を追加（または `DATABASE_URL` 環境変数を直接追加して従来の個別フィールドと併存させる）。
 - `go.mod` / `go.sum` — `github.com/jackc/pgx/v5` を追加（ORM 不採用の場合。採用 ORM は Step 0 で確定）。
 - `Makefile` — `test-integration` ターゲット追加（`go test -tags=integration ./...`）。
@@ -79,7 +79,7 @@
 
 - **HTTP API への影響なし**（repository interface シグネチャは無変更、実装差し替えのみ）。
 - **ULID / cursor / UNIQUE 制約のセマンティクス** は inmemory と postgres で完全一致させる。`repository.OGPJobQueue.Enqueue` コメントや `PostRepository.AttachOGP` コメントに既に仕様が書かれているので、それを postgres 側で忠実に実装する。
-- **default の backing store** を inmemory → postgres に反転させるかは Step 0 で決める。反転させる場合はローカル開発体験に影響があるため `[未確定]` で慎重に扱う。
+- **default の backing store** は Step 0-2 で案 Z（Environment で自動選択、`REPO_BACKEND` で上書き可）に確定。dev は inmemory default、prod / staging は postgres default。
 
 ## スコープ
 
@@ -121,54 +121,30 @@
 
 ---
 
-## Step 0（Phase 0）: 方針の確定
+## Step 0（Phase 0）: 方針の確定 ✅ 確定済み
 
-本タスク着手前にユーザーに確認して確定する項目。確定したら本ドキュメントの該当箇所の `[未確定]` を外す。
+### 0-1. クエリ記述手段の選定 → **A. pgx/v5 直書き**
 
-### 0-1. クエリ記述手段の選定
+- 最小依存、contract test で挙動検証
+- 理由: `internal/domain/*.go` の型を一次資料にしている現状と整合、`List*` 系の cursor クエリは数が限定的で動的ビルダの恩恵が小さい
+- 不採用（本 PR で）: B (sqlc), C (squirrel), D (gorm/ent)
 
-選択肢:
+### 0-2. default backing store → **Z. Environment で自動選択、`REPO_BACKEND` で上書き可**
 
-- **A. `pgx/v5` 直書き + 文字列 SQL** — 最小依存、学習コスト最小、型安全性は低い。contract test で挙動検証できれば許容。
-- **B. `pgx` + `sqlc` — SQL ファイル → 型安全 Go コード自動生成。学習コスト中、schema 変更時の再生成フロー必要。
-- **C. `pgx` + `squirrel` — クエリビルダ。動的クエリ（List の cursor / filter）には書きやすい。
-- **D. `gorm` / `ent`** — ORM。スキーマと Go 型の二重管理が生じ、既存 `internal/domain/*.go` との整合調整が大きい。不採用寄り。
+- `REPO_BACKEND=inmemory|postgres` 明示 → それを使う
+- 未指定: `Environment == "development"` なら inmemory、それ以外は postgres
+- 理由: dev 体験（inmemory で高速起動）と prod 安全（postgres 強制）を両立
 
-`[未確定]` デフォルト想定: **A（pgx 直書き）**。理由:
-- 依存が最小で CI / build 時間への影響が少ない
-- `internal/domain/*.go` の型を一次資料にしている現状と整合
-- `List*` 系の cursor クエリは数が限定的で、動的ビルダの恩恵が小さい
-- sqlc は強力だが schema と `.sql` ファイルの命名規約を導入する必要があり、本 PR のレビュー範囲が広がる
+### 0-3. inmemory 実装の扱い → **P. 残す**
 
-### 0-2. default backing store
-
-選択肢:
-
-- **X. inmemory をデフォルト維持、`DATABASE_URL` or `DB_HOST` があれば postgres** — ローカル `go run ./cmd/server` で即起動できる現状を維持。
-- **Y. postgres をデフォルト、`--backend=inmemory` 明示時のみ inmemory** — production 安全側だが、`db-up` 忘れで起動失敗が増える。
-- **Z. 環境変数 `REPO_BACKEND=inmemory|postgres` で明示、default は Environment == "development" → inmemory, それ以外 → postgres** — 明示的。
-
-`[未確定]` デフォルト想定: **Z**（Environment で自動選択、ただし `REPO_BACKEND` で上書き可）。理由:
-- `config.Environment` はすでに `.env.example` / `config.go` に存在
-- dev 体験（inmemory で高速起動）と prod 安全（postgres 強制）を両立
-- `REPO_BACKEND` 明示で CI の integration test から postgres を強制できる
-
-### 0-3. inmemory 実装の扱い
-
-選択肢:
-
-- **P. inmemory を残す** — ユニットテスト高速化、ローカル dev 体験維持。postgres 実装との drift リスクは contract test で抑える。
-- **Q. inmemory を削除し、全テストを testcontainers / docker-compose の postgres に対して走らせる** — drift リスクゼロだがテストが遅くなる。
-
-`[未確定]` デフォルト想定: **P**（inmemory を残す）。理由:
-- 単体テストは高速な inmemory、統合テストは postgres、というレイヤ分けが既存の in-memory test を壊さない
+- 単体テストは高速な inmemory、統合テストは postgres、というレイヤ分け
+- contract test で drift を検出
 - 本 PR のゴールは「postgres を追加する」であり「inmemory を消す」ではない
-- contract test を共通化すれば drift は検出できる
 
 ### 0-4. 方針の文書化
 
-- Step 0 で確定した 3 項目（クエリ手段 / default backend / inmemory 残置）を **本タスクドキュメントの該当箇所に反映**（`[未確定]` マーカーを外す）
-- `docs/architecture.md` の Repository 層説明にも 1 段落追記（Phase 4 で実施）
+- 上記 3 項目を本ドキュメントに反映済み
+- `docs/architecture.md` の Repository 層説明は Phase 4 で追記
 
 ---
 
@@ -565,15 +541,13 @@ test-integration:
 | PR が肥大化する | Phase 1-4 に分割 |
 | integration test が flaky | migration 適用を `TestMain` 側で冪等に行う（`CREATE TABLE IF NOT EXISTS` ではなく、`TRUNCATE ... CASCADE` を各テスト開始時に実行） |
 
-## `[未確定]` マーカー
+## 確定事項（Phase 0 で決定）
 
-以下は Phase 0 で確定する。確定後は本ドキュメントの該当箇所の `[未確定]` を外し、レビュー対象から除外する。
-
-- **クエリ記述手段**: A (pgx 直書き) / B (sqlc) / C (squirrel) / D (ORM)。デフォルト想定: **A**
-- **default backing store**: X (inmemory default) / Y (postgres default) / Z (Environment 分岐)。デフォルト想定: **Z**
-- **inmemory 実装の扱い**: P (残す) / Q (削除)。デフォルト想定: **P**
-- **migration 実行の CI ステップ**: `db/init.sh` を CI で流用するか、新規 step で migration を走らせるか。デフォルト想定: `db/init.sh` を CI から呼び出す
-- **`GitCommit` var の追加是非**: `cmd/server/main.go` に `GitCommit` を追加するかは 07 と本 08 どちらでもスコープ外。必要なら別タスク
+- **クエリ記述手段**: **A (pgx 直書き)** 確定
+- **default backing store**: **Z (Environment 分岐、`REPO_BACKEND` で上書き可)** 確定
+- **inmemory 実装の扱い**: **P (残す)** 確定
+- **migration 実行の CI ステップ**: `db/init.sh` を CI から呼び出す方針（Phase 4 で実装）
+- **`GitCommit` var の追加是非**: 本タスクではスコープ外、必要なら別タスクで対応
 
 ## 参考
 
