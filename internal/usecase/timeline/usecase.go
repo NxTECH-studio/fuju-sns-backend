@@ -1,5 +1,5 @@
 // Package timeline contains home / user / global timeline use cases. All
-// three return the same PostDetail shape, differing only in the source
+// three return the same post.Detail shape, differing only in the source
 // set of posts.
 package timeline
 
@@ -31,7 +31,7 @@ func NewHomeTimelineUseCase(
 // Execute materializes the home timeline for mySub. Fan-out on read: one
 // query for the followee set, one for the post page, plus the hydrator's
 // batch calls.
-func (uc *HomeTimelineUseCase) Execute(ctx context.Context, mySub string, cursor *string, limit int) ([]*postusecase.PostDetail, string, error) {
+func (uc *HomeTimelineUseCase) Execute(ctx context.Context, mySub string, cursor *string, limit int) ([]*postusecase.Detail, string, error) {
 	if mySub == "" {
 		return nil, "", errors.Unauthorized("authentication required")
 	}
@@ -42,7 +42,11 @@ func (uc *HomeTimelineUseCase) Execute(ctx context.Context, mySub string, cursor
 		return nil, "", errors.DatabaseError("failed to list follows", err)
 	}
 	// Always include self so the user sees their own posts in the feed.
-	authorSubs := append(followees, mySub)
+	// Allocate a fresh slice so we do not mutate the backing array of
+	// followees (which came from the repository and may be reused).
+	authorSubs := make([]string, 0, len(followees)+1)
+	authorSubs = append(authorSubs, followees...)
+	authorSubs = append(authorSubs, mySub)
 
 	posts, nextCursor, err := uc.postRepo.ListByUserIDs(ctx, authorSubs, cursor, limit)
 	if err != nil {
@@ -69,7 +73,7 @@ func NewUserTimelineUseCase(postRepo repository.PostRepository, hydrator *postus
 }
 
 // Execute returns posts authored by targetSub.
-func (uc *UserTimelineUseCase) Execute(ctx context.Context, targetSub string, cursor *string, limit int, viewerSub *string) ([]*postusecase.PostDetail, string, error) {
+func (uc *UserTimelineUseCase) Execute(ctx context.Context, targetSub string, cursor *string, limit int, viewerSub *string) ([]*postusecase.Detail, string, error) {
 	if targetSub == "" {
 		return nil, "", errors.InvalidRequest("sub is required", nil)
 	}
@@ -98,7 +102,7 @@ func NewGlobalTimelineUseCase(postRepo repository.PostRepository, hydrator *post
 }
 
 // Execute returns the newest posts globally.
-func (uc *GlobalTimelineUseCase) Execute(ctx context.Context, cursor *string, limit int, viewerSub *string) ([]*postusecase.PostDetail, string, error) {
+func (uc *GlobalTimelineUseCase) Execute(ctx context.Context, cursor *string, limit int, viewerSub *string) ([]*postusecase.Detail, string, error) {
 	limit = postusecase.NormalizeLimit(limit)
 	posts, nextCursor, err := uc.postRepo.List(ctx, nil, cursor, limit)
 	if err != nil {

@@ -32,11 +32,17 @@ var trackingParams = map[string]struct{}{
 	"mc_eid":       {},
 }
 
+// Scheme constants used across the package's scheme allow-list checks.
+const (
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
+)
+
 // defaultPorts drops the URL port segment when the scheme's default
 // matches.
 var defaultPorts = map[string]string{
-	"http":  "80",
-	"https": "443",
+	schemeHTTP:  "80",
+	schemeHTTPS: "443",
 }
 
 // multiSlashRE collapses "//" and longer runs to a single "/". Applied
@@ -62,7 +68,7 @@ func Normalize(rawURL string) (string, error) {
 		return "", fmt.Errorf("parse: %w", err)
 	}
 	scheme := strings.ToLower(u.Scheme)
-	if scheme != "http" && scheme != "https" {
+	if scheme != schemeHTTP && scheme != schemeHTTPS {
 		return "", fmt.Errorf("unsupported scheme %q", u.Scheme)
 	}
 	u.Scheme = scheme

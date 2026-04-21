@@ -103,7 +103,7 @@ type postDetailView struct {
 	FollowingAuthor bool            `json:"following_author"`
 }
 
-func toPostDetailView(d *postusecase.PostDetail) postDetailView {
+func toPostDetailView(d *postusecase.Detail) postDetailView {
 	images := make([]postImageView, len(d.Images))
 	for i, img := range d.Images {
 		images[i] = postImageView{ID: img.ID, PublicURL: img.PublicURL, Position: i}
@@ -159,7 +159,7 @@ type postListResponse struct {
 	NextCursor *string          `json:"next_cursor"`
 }
 
-func toPostListResponse(details []*postusecase.PostDetail, nextCursor string) postListResponse {
+func toPostListResponse(details []*postusecase.Detail, nextCursor string) postListResponse {
 	views := make([]postDetailView, len(details))
 	for i, d := range details {
 		views[i] = toPostDetailView(d)

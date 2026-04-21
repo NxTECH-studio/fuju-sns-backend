@@ -11,7 +11,7 @@ import (
 
 type seedFn func(subs ...string)
 
-func newFixture(t *testing.T) (*FollowUseCase, *UnfollowUseCase, *ListFollowersUseCase, *ListFollowingUseCase, seedFn) {
+func newFixture(t *testing.T) (*UseCase, *UnfollowUseCase, *ListFollowersUseCase, *ListFollowingUseCase, seedFn) {
 	t.Helper()
 	userRepo := inmemory.NewUserRepository()
 	followRepo := inmemory.NewFollowRepository()
@@ -23,7 +23,7 @@ func newFixture(t *testing.T) (*FollowUseCase, *UnfollowUseCase, *ListFollowersU
 			}
 		}
 	}
-	return NewFollowUseCase(userRepo, followRepo),
+	return NewUseCase(userRepo, followRepo),
 		NewUnfollowUseCase(userRepo, followRepo),
 		NewListFollowersUseCase(userRepo, followRepo),
 		NewListFollowingUseCase(userRepo, followRepo),

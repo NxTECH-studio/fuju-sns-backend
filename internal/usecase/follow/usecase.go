@@ -16,29 +16,29 @@ const DefaultPageLimit = 20
 // MaxPageLimit caps the per-request page size.
 const MaxPageLimit = 50
 
-// FollowResult is the response payload for Follow / Unfollow. It returns
+// Result is the response payload for Follow / Unfollow. It returns
 // the target's fresh follower count so the client can update the profile
 // UI without a second roundtrip.
-type FollowResult struct {
+type Result struct {
 	Following      bool
 	FollowersCount int64
 }
 
-// FollowUseCase creates a directed follow relation from followerSub to
+// UseCase creates a directed follow relation from followerSub to
 // followeeSub. Idempotent.
-type FollowUseCase struct {
+type UseCase struct {
 	userRepo   repository.UserRepository
 	followRepo repository.FollowRepository
 }
 
-// NewFollowUseCase constructs a FollowUseCase.
-func NewFollowUseCase(userRepo repository.UserRepository, followRepo repository.FollowRepository) *FollowUseCase {
-	return &FollowUseCase{userRepo: userRepo, followRepo: followRepo}
+// NewUseCase constructs a follow UseCase.
+func NewUseCase(userRepo repository.UserRepository, followRepo repository.FollowRepository) *UseCase {
+	return &UseCase{userRepo: userRepo, followRepo: followRepo}
 }
 
 // Execute performs the follow. Repeat calls return the existing state
 // without bumping the counters a second time.
-func (uc *FollowUseCase) Execute(ctx context.Context, followerSub, followeeSub string) (*FollowResult, error) {
+func (uc *UseCase) Execute(ctx context.Context, followerSub, followeeSub string) (*Result, error) {
 	if followerSub == "" {
 		return nil, errors.Unauthorized("authentication required")
 	}
@@ -71,7 +71,7 @@ func (uc *FollowUseCase) Execute(ctx context.Context, followerSub, followeeSub s
 		}
 		followersCount++
 	}
-	return &FollowResult{Following: true, FollowersCount: followersCount}, nil
+	return &Result{Following: true, FollowersCount: followersCount}, nil
 }
 
 // UnfollowUseCase removes a directed follow relation. Idempotent.
@@ -86,7 +86,7 @@ func NewUnfollowUseCase(userRepo repository.UserRepository, followRepo repositor
 }
 
 // Execute performs the unfollow. Repeat calls are no-ops.
-func (uc *UnfollowUseCase) Execute(ctx context.Context, followerSub, followeeSub string) (*FollowResult, error) {
+func (uc *UnfollowUseCase) Execute(ctx context.Context, followerSub, followeeSub string) (*Result, error) {
 	if followerSub == "" {
 		return nil, errors.Unauthorized("authentication required")
 	}
@@ -114,7 +114,7 @@ func (uc *UnfollowUseCase) Execute(ctx context.Context, followerSub, followeeSub
 	if err != nil {
 		return nil, errors.DatabaseError("failed to reload target user", err)
 	}
-	return &FollowResult{Following: false, FollowersCount: countOrZero(refreshed)}, nil
+	return &Result{Following: false, FollowersCount: countOrZero(refreshed)}, nil
 }
 
 // ListFollowersUseCase returns a paginated list of users that follow sub.

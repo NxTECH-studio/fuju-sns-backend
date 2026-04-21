@@ -43,7 +43,9 @@ func TestCreatePostRequestValidate(t *testing.T) {
 		"01HXPST000000000000000CCCC",
 		"01HXPST000000000000000DDDD",
 	}
-	ulids5 := append(ulids4, "01HXPST000000000000000EEEE")
+	ulids5 := make([]string, 0, len(ulids4)+1)
+	ulids5 = append(ulids5, ulids4...)
+	ulids5 = append(ulids5, "01HXPST000000000000000EEEE")
 	dup := []string{ulids4[0], ulids4[0]}
 	strPtr := func(s string) *string { return &s }
 

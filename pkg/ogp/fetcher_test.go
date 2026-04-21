@@ -47,7 +47,7 @@ func TestFetcher_SuccessExtractsMetadata(t *testing.T) {
 }
 
 func TestFetcher_NonHTMLContentType(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{}`))
 	}))
@@ -63,7 +63,7 @@ func TestFetcher_NonHTMLContentType(t *testing.T) {
 }
 
 func TestFetcher_5xxIsRetriable(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 	}))
 	defer srv.Close()
@@ -79,7 +79,7 @@ func TestFetcher_5xxIsRetriable(t *testing.T) {
 }
 
 func TestFetcher_4xxNotRetriable(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer srv.Close()
@@ -95,7 +95,7 @@ func TestFetcher_4xxNotRetriable(t *testing.T) {
 
 func TestFetcher_BodyCapAppliedOnOversizedResponse(t *testing.T) {
 	big := strings.Repeat("A", int(MaxBodyBytes)+1024)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte("<html><head><title>T</title></head><body>" + big + "</body></html>"))
 	}))

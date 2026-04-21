@@ -203,7 +203,10 @@ func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 }
 
 // parseSubFromPath extracts a sub (ULID) from a path variable with format
-// validation.
+// validation. The name parameter is kept for future path variables beyond
+// "sub" (e.g. "followee_sub") even though every current caller passes "sub".
+//
+//nolint:unparam // name is intentionally parameterised for future path variables.
 func parseSubFromPath(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
 	return parseULIDFromPath(w, r, name, "invalid sub (expected ULID)")
 }

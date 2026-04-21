@@ -59,7 +59,7 @@ type OGPJobQueueLike interface {
 }
 
 func TestWorker_Success_CachesAndMarksDone(t *testing.T) {
-	w, srv, queue := newWorkerFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	w, srv, queue := newWorkerFixture(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte(`<html><head><meta property="og:title" content="Hello"></head></html>`))
 	}))
@@ -94,7 +94,7 @@ func TestWorker_Success_CachesAndMarksDone(t *testing.T) {
 }
 
 func TestWorker_5xxRetriable_LeavesQueued(t *testing.T) {
-	w, srv, queue := newWorkerFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	w, srv, queue := newWorkerFixture(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadGateway)
 	}))
 
@@ -118,7 +118,7 @@ func TestWorker_5xxRetriable_LeavesQueued(t *testing.T) {
 }
 
 func TestWorker_4xxNonRetriable_WritesErrorRow(t *testing.T) {
-	w, srv, queue := newWorkerFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	w, srv, queue := newWorkerFixture(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
 
