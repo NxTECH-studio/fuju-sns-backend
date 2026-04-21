@@ -4,6 +4,7 @@ package handler
 import (
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/fuju/backend/internal/domain"
 	imageusecase "github.com/fuju/backend/internal/usecase/image"
@@ -12,14 +13,24 @@ import (
 	"github.com/fuju/backend/pkg/response"
 )
 
-// ImageHandler contains handlers for image endpoints
+// Image upload limits.
+const (
+	// maxImageBytes is the hard per-file cap enforced before the usecase
+	// even sees the data.
+	maxImageBytes = 5 * 1024 * 1024
+	// maxImageRequestBytes caps the whole multipart body, leaving a small
+	// headroom for the envelope + headers.
+	maxImageRequestBytes = maxImageBytes + 1024*1024
+)
+
+// ImageHandler contains handlers for image endpoints.
 type ImageHandler struct {
 	uploadImage   *imageusecase.UploadImageUseCase
 	getUserImages *imageusecase.GetUserImagesUseCase
 	deleteImage   *imageusecase.DeleteImageUseCase
 }
 
-// NewImageHandler creates a new ImageHandler
+// NewImageHandler creates a new ImageHandler.
 func NewImageHandler(
 	uploadImage *imageusecase.UploadImageUseCase,
 	getUserImages *imageusecase.GetUserImagesUseCase,
@@ -32,22 +43,22 @@ func NewImageHandler(
 	}
 }
 
-// UploadImage handles POST /v1/images
+// UploadImage handles POST /v1/images.
 func (h *ImageHandler) UploadImage(w http.ResponseWriter, r *http.Request) {
-	// Verify authentication
-	userID, ok := auth.GetUserIDFromContext(r.Context())
+	sub, ok := auth.GetSubFromContext(r.Context())
 	if !ok {
 		WriteErrorResponse(w, errors.Unauthorized("authentication required"))
 		return
 	}
 
-	// Parse multipart form (max 6MB)
-	if err := r.ParseMultipartForm(6 * 1024 * 1024); err != nil {
+	// Hard-cap the request body before ParseMultipartForm so an attacker
+	// cannot exhaust memory or force large disk spill.
+	r.Body = http.MaxBytesReader(w, r.Body, maxImageRequestBytes)
+	if err := r.ParseMultipartForm(maxImageRequestBytes); err != nil {
 		WriteErrorResponse(w, errors.InvalidRequest("failed to parse form data", err))
 		return
 	}
 
-	// Get file from form
 	file, fileHeader, err := r.FormFile("file")
 	if err != nil {
 		WriteErrorResponse(w, errors.InvalidRequest("file field is required", err))
@@ -57,40 +68,41 @@ func (h *ImageHandler) UploadImage(w http.ResponseWriter, r *http.Request) {
 		_ = file.Close()
 	}()
 
-	// Read file data
 	fileData, err := io.ReadAll(file)
 	if err != nil {
 		WriteErrorResponse(w, errors.InvalidRequest("failed to read file data", err))
 		return
 	}
 
-	// Validate file size (5MB limit)
-	if len(fileData) > 5*1024*1024 {
+	if len(fileData) > maxImageBytes {
 		WriteErrorResponse(w, errors.InvalidRequest("file size exceeds 5MB limit", nil))
 		return
 	}
 
-	// Get MIME type from Content-Type header
 	mimeType := fileHeader.Header.Get("Content-Type")
 	if mimeType == "" {
-		mimeType = "application/octet-stream"
+		mimeType = http.DetectContentType(fileData)
 	}
-
-	// Validate MIME type (only image/* types allowed)
-	if len(mimeType) < 6 || mimeType[:6] != "image/" {
+	if !strings.HasPrefix(mimeType, "image/") {
 		WriteErrorResponse(w, errors.InvalidRequest("only image files are allowed", nil))
 		return
 	}
 
-	// Create upload request
+	// Cross-check advertised type against sniffed type so a client cannot
+	// label HTML/JS as image/jpeg.
+	sniffed := http.DetectContentType(fileData)
+	if !strings.HasPrefix(sniffed, "image/") {
+		WriteErrorResponse(w, errors.InvalidRequest("file content is not a recognised image", nil))
+		return
+	}
+
 	req := &domain.UploadImageRequest{
 		FileName: fileHeader.Filename,
 		FileData: fileData,
 		MimeType: mimeType,
-		UserID:   userID,
+		UserID:   sub,
 	}
 
-	// Execute upload use case
 	uploadedImage, err := h.uploadImage.Execute(r.Context(), req)
 	if err != nil {
 		WriteErrorResponse(w, err)
@@ -100,23 +112,20 @@ func (h *ImageHandler) UploadImage(w http.ResponseWriter, r *http.Request) {
 	WriteSuccessResponse(w, uploadedImage, http.StatusCreated)
 }
 
-// GetUserImages handles GET /v1/images
+// GetUserImages handles GET /v1/images.
 func (h *ImageHandler) GetUserImages(w http.ResponseWriter, r *http.Request) {
-	// Verify authentication
-	userID, ok := auth.GetUserIDFromContext(r.Context())
+	sub, ok := auth.GetSubFromContext(r.Context())
 	if !ok {
 		WriteErrorResponse(w, errors.Unauthorized("authentication required"))
 		return
 	}
 
-	// Execute get user images use case
-	images, err := h.getUserImages.Execute(r.Context(), userID)
+	images, err := h.getUserImages.Execute(r.Context(), sub)
 	if err != nil {
 		WriteErrorResponse(w, err)
 		return
 	}
 
-	// Prepare list response
 	listResp := &response.ListResponse{
 		Data:   images,
 		Limit:  100,
@@ -127,24 +136,20 @@ func (h *ImageHandler) GetUserImages(w http.ResponseWriter, r *http.Request) {
 	WriteListResponse(w, listResp, http.StatusOK)
 }
 
-// DeleteImage handles DELETE /v1/images/{id}
+// DeleteImage handles DELETE /v1/images/{id}.
 func (h *ImageHandler) DeleteImage(w http.ResponseWriter, r *http.Request) {
-	// Verify authentication
-	userID, ok := auth.GetUserIDFromContext(r.Context())
+	sub, ok := auth.GetSubFromContext(r.Context())
 	if !ok {
 		WriteErrorResponse(w, errors.Unauthorized("authentication required"))
 		return
 	}
 
-	// Get image ID from URL path
-	imageID := r.PathValue("id")
-	if imageID == "" {
-		WriteErrorResponse(w, errors.InvalidRequest("image ID is required", nil))
+	imageID, ok := parseULIDFromPath(w, r, "id", "invalid image ID")
+	if !ok {
 		return
 	}
 
-	// Execute delete image use case
-	if err := h.deleteImage.Execute(r.Context(), imageID, userID); err != nil {
+	if err := h.deleteImage.Execute(r.Context(), imageID, sub); err != nil {
 		WriteErrorResponse(w, err)
 		return
 	}

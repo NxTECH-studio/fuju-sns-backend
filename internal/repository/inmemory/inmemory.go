@@ -10,27 +10,25 @@ import (
 	"github.com/fuju/backend/internal/repository"
 )
 
-// UserRepository is an in-memory implementation of the UserRepository interface
+// UserRepository is an in-memory implementation of the UserRepository interface.
 type UserRepository struct {
 	mu    sync.RWMutex
-	users map[int64]*domain.User
-	idSeq int64
+	users map[string]*domain.User
 }
 
-// NewUserRepository creates a new in-memory user repository
+// NewUserRepository creates a new in-memory user repository.
 func NewUserRepository() repository.UserRepository {
 	return &UserRepository{
-		users: make(map[int64]*domain.User),
-		idSeq: 0,
+		users: make(map[string]*domain.User),
 	}
 }
 
-// GetByID retrieves a user by ID
-func (r *UserRepository) GetByID(_ context.Context, id int64) (*domain.User, error) {
+// GetBySub retrieves a user by AuthCore sub.
+func (r *UserRepository) GetBySub(_ context.Context, sub string) (*domain.User, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	user, ok := r.users[id]
+	user, ok := r.users[sub]
 	if !ok {
 		return nil, nil
 	}
@@ -39,37 +37,63 @@ func (r *UserRepository) GetByID(_ context.Context, id int64) (*domain.User, err
 	return &userCopy, nil
 }
 
-// GetByUsername retrieves a user by username
-func (r *UserRepository) GetByUsername(_ context.Context, username string) (*domain.User, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+// Upsert inserts or updates a user. On update, the stored values for
+// fields the caller did not populate (zero values in the input) are
+// preserved — so hydrate refreshing only *_Cached fields cannot accidentally
+// clobber is_admin, bio, banner_url, or created_at.
+func (r *UserRepository) Upsert(_ context.Context, user *domain.User) (*domain.User, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	for _, user := range r.users {
-		if user.Username == username {
-			userCopy := *user
-			return &userCopy, nil
+	now := time.Now()
+	existing, ok := r.users[user.Sub]
+	stored := *user
+
+	if ok {
+		// Preserved server-owned fields.
+		stored.IsAdmin = existing.IsAdmin
+		stored.CreatedAt = existing.CreatedAt
+		stored.DeletedAt = existing.DeletedAt
+		// Preserve SNS-owned fields when the caller did not overwrite them.
+		if stored.Bio == "" {
+			stored.Bio = existing.Bio
 		}
+		if stored.BannerURL == "" {
+			stored.BannerURL = existing.BannerURL
+		}
+	} else if stored.CreatedAt.IsZero() {
+		stored.CreatedAt = now
 	}
+	stored.UpdatedAt = now
 
-	return nil, nil
+	r.users[user.Sub] = &stored
+	storedCopy := stored
+	return &storedCopy, nil
 }
 
-// GetByOAuthID retrieves a user by OAuth provider and ID
-func (r *UserRepository) GetByOAuthID(_ context.Context, provider, oauthID string) (*domain.User, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+// UpdateProfile updates SNS-owned fields (bio, banner_url).
+func (r *UserRepository) UpdateProfile(_ context.Context, sub string, req *domain.UpdateUserProfileRequest) (*domain.User, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 
-	for _, user := range r.users {
-		if user.OAuthProvider == provider && user.OAuthID == oauthID {
-			userCopy := *user
-			return &userCopy, nil
-		}
+	user, ok := r.users[sub]
+	if !ok {
+		return nil, nil
 	}
 
-	return nil, nil
+	if req.Bio != nil {
+		user.Bio = *req.Bio
+	}
+	if req.BannerURL != nil {
+		user.BannerURL = *req.BannerURL
+	}
+	user.UpdatedAt = time.Now()
+
+	userCopy := *user
+	return &userCopy, nil
 }
 
-// List retrieves a paginated list of users
+// List retrieves a paginated list of users.
 func (r *UserRepository) List(_ context.Context, limit, offset int) ([]*domain.User, int, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -95,42 +119,12 @@ func (r *UserRepository) List(_ context.Context, limit, offset int) ([]*domain.U
 	return users[offset:end], total, nil
 }
 
-// Create creates a new user
-func (r *UserRepository) Create(_ context.Context, user *domain.User) (*domain.User, error) {
+// Delete soft-deletes a user.
+func (r *UserRepository) Delete(_ context.Context, sub string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.idSeq++
-	user.ID = r.idSeq
-	user.CreatedAt = time.Now()
-	user.UpdatedAt = time.Now()
-
-	userCopy := *user
-	r.users[user.ID] = &userCopy
-	return &userCopy, nil
-}
-
-// Update updates an existing user
-func (r *UserRepository) Update(_ context.Context, user *domain.User) (*domain.User, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if _, ok := r.users[user.ID]; !ok {
-		return nil, nil
-	}
-
-	user.UpdatedAt = time.Now()
-	userCopy := *user
-	r.users[user.ID] = &userCopy
-	return &userCopy, nil
-}
-
-// Delete soft-deletes a user
-func (r *UserRepository) Delete(_ context.Context, id int64) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if user, ok := r.users[id]; ok {
+	if user, ok := r.users[sub]; ok {
 		now := time.Now()
 		user.DeletedAt = &now
 	}
@@ -138,23 +132,21 @@ func (r *UserRepository) Delete(_ context.Context, id int64) error {
 	return nil
 }
 
-// PostRepository is an in-memory implementation of the PostRepository interface
+// PostRepository is an in-memory implementation of the PostRepository interface.
 type PostRepository struct {
 	mu    sync.RWMutex
-	posts map[int64]*domain.Post
-	idSeq int64
+	posts map[string]*domain.Post
 }
 
-// NewPostRepository creates a new in-memory post repository
+// NewPostRepository creates a new in-memory post repository.
 func NewPostRepository() repository.PostRepository {
 	return &PostRepository{
-		posts: make(map[int64]*domain.Post),
-		idSeq: 0,
+		posts: make(map[string]*domain.Post),
 	}
 }
 
-// GetByID retrieves a post by ID
-func (r *PostRepository) GetByID(_ context.Context, id int64) (*domain.Post, error) {
+// GetByID retrieves a post by ID.
+func (r *PostRepository) GetByID(_ context.Context, id string) (*domain.Post, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -167,8 +159,8 @@ func (r *PostRepository) GetByID(_ context.Context, id int64) (*domain.Post, err
 	return &postCopy, nil
 }
 
-// List retrieves a paginated list of posts
-func (r *PostRepository) List(_ context.Context, userID *int64, limit, offset int) ([]*domain.Post, int, error) {
+// List retrieves a paginated list of posts.
+func (r *PostRepository) List(_ context.Context, userID *string, limit, offset int) ([]*domain.Post, int, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -195,23 +187,23 @@ func (r *PostRepository) List(_ context.Context, userID *int64, limit, offset in
 	return posts[offset:end], total, nil
 }
 
-// Create creates a new post
+// Create creates a new post. Caller is responsible for setting post.ID
+// (typically a ULID).
 func (r *PostRepository) Create(_ context.Context, post *domain.Post) (*domain.Post, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.idSeq++
-	post.ID = r.idSeq
-	post.CreatedAt = time.Now()
-	post.UpdatedAt = time.Now()
+	now := time.Now()
+	post.CreatedAt = now
+	post.UpdatedAt = now
 
 	postCopy := *post
 	r.posts[post.ID] = &postCopy
 	return &postCopy, nil
 }
 
-// Delete soft-deletes a post
-func (r *PostRepository) Delete(_ context.Context, id int64) error {
+// Delete soft-deletes a post.
+func (r *PostRepository) Delete(_ context.Context, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -223,8 +215,8 @@ func (r *PostRepository) Delete(_ context.Context, id int64) error {
 	return nil
 }
 
-// IncrementCommentCount increments the comment count
-func (r *PostRepository) IncrementCommentCount(_ context.Context, postID int64) error {
+// IncrementCommentCount increments the comment count.
+func (r *PostRepository) IncrementCommentCount(_ context.Context, postID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -235,8 +227,8 @@ func (r *PostRepository) IncrementCommentCount(_ context.Context, postID int64) 
 	return nil
 }
 
-// DecrementCommentCount decrements the comment count
-func (r *PostRepository) DecrementCommentCount(_ context.Context, postID int64) error {
+// DecrementCommentCount decrements the comment count.
+func (r *PostRepository) DecrementCommentCount(_ context.Context, postID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -247,23 +239,21 @@ func (r *PostRepository) DecrementCommentCount(_ context.Context, postID int64) 
 	return nil
 }
 
-// CommentRepository is an in-memory implementation of the CommentRepository interface
+// CommentRepository is an in-memory implementation of the CommentRepository interface.
 type CommentRepository struct {
 	mu       sync.RWMutex
-	comments map[int64]*domain.Comment
-	idSeq    int64
+	comments map[string]*domain.Comment
 }
 
-// NewCommentRepository creates a new in-memory comment repository
+// NewCommentRepository creates a new in-memory comment repository.
 func NewCommentRepository() repository.CommentRepository {
 	return &CommentRepository{
-		comments: make(map[int64]*domain.Comment),
-		idSeq:    0,
+		comments: make(map[string]*domain.Comment),
 	}
 }
 
-// GetByID retrieves a comment by ID
-func (r *CommentRepository) GetByID(_ context.Context, id int64) (*domain.Comment, error) {
+// GetByID retrieves a comment by ID.
+func (r *CommentRepository) GetByID(_ context.Context, id string) (*domain.Comment, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -276,8 +266,8 @@ func (r *CommentRepository) GetByID(_ context.Context, id int64) (*domain.Commen
 	return &commentCopy, nil
 }
 
-// ListByPostID retrieves comments for a post
-func (r *CommentRepository) ListByPostID(_ context.Context, postID int64, limit, offset int) ([]*domain.Comment, int, error) {
+// ListByPostID retrieves comments for a post.
+func (r *CommentRepository) ListByPostID(_ context.Context, postID string, limit, offset int) ([]*domain.Comment, int, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -302,23 +292,22 @@ func (r *CommentRepository) ListByPostID(_ context.Context, postID int64, limit,
 	return comments[offset:end], total, nil
 }
 
-// Create creates a new comment
+// Create creates a new comment. Caller is responsible for setting comment.ID.
 func (r *CommentRepository) Create(_ context.Context, comment *domain.Comment) (*domain.Comment, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.idSeq++
-	comment.ID = r.idSeq
-	comment.CreatedAt = time.Now()
-	comment.UpdatedAt = time.Now()
+	now := time.Now()
+	comment.CreatedAt = now
+	comment.UpdatedAt = now
 
 	commentCopy := *comment
 	r.comments[comment.ID] = &commentCopy
 	return &commentCopy, nil
 }
 
-// Delete soft-deletes a comment
-func (r *CommentRepository) Delete(_ context.Context, id int64) error {
+// Delete soft-deletes a comment.
+func (r *CommentRepository) Delete(_ context.Context, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -330,20 +319,20 @@ func (r *CommentRepository) Delete(_ context.Context, id int64) error {
 	return nil
 }
 
-// ImageRepository is an in-memory implementation of the ImageRepository interface
+// ImageRepository is an in-memory implementation of the ImageRepository interface.
 type ImageRepository struct {
 	mu     sync.RWMutex
 	images map[string]*domain.Image
 }
 
-// NewImageRepository creates a new in-memory image repository
+// NewImageRepository creates a new in-memory image repository.
 func NewImageRepository() repository.ImageRepository {
 	return &ImageRepository{
 		images: make(map[string]*domain.Image),
 	}
 }
 
-// GetByID retrieves an image by ID
+// GetByID retrieves an image by ID.
 func (r *ImageRepository) GetByID(_ context.Context, id string) (*domain.Image, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -357,8 +346,8 @@ func (r *ImageRepository) GetByID(_ context.Context, id string) (*domain.Image, 
 	return &imageCopy, nil
 }
 
-// GetByUserID retrieves all images for a user
-func (r *ImageRepository) GetByUserID(_ context.Context, userID int64) ([]*domain.Image, error) {
+// GetByUserID retrieves all images for a user.
+func (r *ImageRepository) GetByUserID(_ context.Context, userID string) ([]*domain.Image, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -373,20 +362,21 @@ func (r *ImageRepository) GetByUserID(_ context.Context, userID int64) ([]*domai
 	return images, nil
 }
 
-// Create stores a new image record
+// Create stores a new image record.
 func (r *ImageRepository) Create(_ context.Context, image *domain.Image) (*domain.Image, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	image.CreatedAt = time.Now()
-	image.UpdatedAt = time.Now()
+	now := time.Now()
+	image.CreatedAt = now
+	image.UpdatedAt = now
 
 	imageCopy := *image
 	r.images[image.ID] = &imageCopy
 	return &imageCopy, nil
 }
 
-// Delete soft-deletes an image
+// Delete soft-deletes an image.
 func (r *ImageRepository) Delete(_ context.Context, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

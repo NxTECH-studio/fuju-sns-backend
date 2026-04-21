@@ -6,12 +6,15 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/fuju/backend/internal/domain"
 	"github.com/fuju/backend/pkg/errors"
+	"github.com/oklog/ulid/v2"
 )
 
 // R2Service provides Cloudflare R2 storage operations
@@ -81,10 +84,14 @@ func NewR2Service() (*R2Service, error) {
 	}, nil
 }
 
-// Upload uploads a file to R2 storage
+// Upload uploads a file to R2 storage. The storage key is
+// images/{userID}/{ulid}/{safeFilename} where safeFilename is the submitted
+// filename with any directory components stripped, guaranteeing the object
+// always lands under the caller's own prefix even for malicious input.
 func (r *R2Service) Upload(ctx context.Context, req *domain.UploadImageRequest) (storageKey, publicURL string, err error) {
-	// Generate storage key: images/{userID}/{uuid}/{filename}
-	storageKey = fmt.Sprintf("images/%d/%s", req.UserID, req.FileName)
+	objectID := ulid.Make().String()
+	safeName := sanitizeFilename(req.FileName)
+	storageKey = fmt.Sprintf("images/%s/%s/%s", req.UserID, objectID, safeName)
 
 	// Upload to R2
 	_, err = r.client.PutObject(ctx, &s3.PutObjectInput{
@@ -105,6 +112,20 @@ func (r *R2Service) Upload(ctx context.Context, req *domain.UploadImageRequest) 
 
 	publicURL = fmt.Sprintf("%s/%s", r.publicDomain, storageKey)
 	return storageKey, publicURL, nil
+}
+
+// sanitizeFilename strips any directory components from a user-supplied
+// filename so it cannot escape its intended prefix. Falls back to "file" if
+// the result is empty.
+func sanitizeFilename(name string) string {
+	// Handle both unix and windows path separators before filepath.Base so
+	// neither can smuggle through on the opposite platform.
+	name = strings.ReplaceAll(name, "\\", "/")
+	name = filepath.Base(name)
+	if name == "" || name == "." || name == "/" {
+		return "file"
+	}
+	return name
 }
 
 // Delete deletes a file from R2 storage

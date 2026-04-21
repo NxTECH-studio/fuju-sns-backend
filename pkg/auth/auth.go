@@ -1,111 +1,62 @@
-// Package auth provides authentication utilities.
+// Package auth holds context helpers for propagating the authenticated
+// identity through the request handler chain. Token issuance and validation
+// live in AuthCore; see pkg/authcore.
 package auth
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"time"
 
-	"github.com/golang-jwt/jwt/v5"
+	"github.com/fuju/backend/internal/domain"
 )
 
-// UserClaims represents JWT claims for a user
-type UserClaims struct {
-	UserID int64  `json:"user_id"`
-	Email  string `json:"email"`
-	jwt.RegisteredClaims
-}
-
-// TokenManager handles JWT token generation and validation
-type TokenManager struct {
-	secret            string
-	accessExpiration  time.Duration
-	refreshExpiration time.Duration
-}
-
-// NewTokenManager creates a new TokenManager
-func NewTokenManager(secret string, accessExpiration, refreshExpiration time.Duration) *TokenManager {
-	return &TokenManager{
-		secret:            secret,
-		accessExpiration:  accessExpiration,
-		refreshExpiration: refreshExpiration,
-	}
-}
-
-// GenerateAccessToken generates a new access token
-func (tm *TokenManager) GenerateAccessToken(userID int64, email string) (string, error) {
-	claims := UserClaims{
-		UserID: userID,
-		Email:  email,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(tm.accessExpiration)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString([]byte(tm.secret))
-	if err != nil {
-		return "", fmt.Errorf("failed to sign token: %w", err)
-	}
-
-	return tokenString, nil
-}
-
-// GenerateRefreshToken generates a new refresh token
-func (tm *TokenManager) GenerateRefreshToken(userID int64) (string, error) {
-	claims := UserClaims{
-		UserID: userID,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(tm.refreshExpiration)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	tokenString, err := token.SignedString([]byte(tm.secret))
-	if err != nil {
-		return "", fmt.Errorf("failed to sign token: %w", err)
-	}
-
-	return tokenString, nil
-}
-
-// ValidateToken validates a token and returns the claims
-func (tm *TokenManager) ValidateToken(tokenString string) (*UserClaims, error) {
-	claims := &UserClaims{}
-
-	token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
-		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
-		}
-		return []byte(tm.secret), nil
-	})
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse token: %w", err)
-	}
-
-	if !token.Valid {
-		return nil, errors.New("invalid token")
-	}
-
-	return claims, nil
-}
-
-// Context keys for auth
 type contextKey string
 
-const userIDKey contextKey = "user_id"
+const (
+	subKey         contextKey = "authcore_sub"
+	accessTokenKey contextKey = "authcore_access_token"
+	currentUserKey contextKey = "authcore_current_user"
+)
 
-// SetUserInContext sets the user ID in the request context
-func SetUserInContext(ctx context.Context, userID int64) context.Context {
-	return context.WithValue(ctx, userIDKey, userID)
+// SetSubInContext stores the authenticated AuthCore sub on the context.
+func SetSubInContext(ctx context.Context, sub string) context.Context {
+	return context.WithValue(ctx, subKey, sub)
 }
 
-// GetUserIDFromContext retrieves the user ID from the request context
-func GetUserIDFromContext(ctx context.Context) (int64, bool) {
-	userID, ok := ctx.Value(userIDKey).(int64)
-	return userID, ok
+// GetSubFromContext retrieves the authenticated sub from the context.
+func GetSubFromContext(ctx context.Context) (string, bool) {
+	sub, ok := ctx.Value(subKey).(string)
+	if !ok || sub == "" {
+		return "", false
+	}
+	return sub, true
+}
+
+// SetAccessTokenInContext stores the caller's AuthCore access token so later
+// stages (hydrate) can call AuthCore on the user's behalf.
+func SetAccessTokenInContext(ctx context.Context, token string) context.Context {
+	return context.WithValue(ctx, accessTokenKey, token)
+}
+
+// GetAccessTokenFromContext returns the caller's AuthCore access token.
+func GetAccessTokenFromContext(ctx context.Context) (string, bool) {
+	tok, ok := ctx.Value(accessTokenKey).(string)
+	if !ok || tok == "" {
+		return "", false
+	}
+	return tok, true
+}
+
+// SetCurrentUserInContext stores the hydrated User on the context so
+// downstream handlers can avoid a second lookup.
+func SetCurrentUserInContext(ctx context.Context, user *domain.User) context.Context {
+	return context.WithValue(ctx, currentUserKey, user)
+}
+
+// GetCurrentUserFromContext returns the hydrated User if present.
+func GetCurrentUserFromContext(ctx context.Context) (*domain.User, bool) {
+	user, ok := ctx.Value(currentUserKey).(*domain.User)
+	if !ok || user == nil {
+		return nil, false
+	}
+	return user, true
 }

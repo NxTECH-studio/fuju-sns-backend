@@ -18,27 +18,30 @@ import (
 	imageusecase "github.com/fuju/backend/internal/usecase/image"
 	postusecase "github.com/fuju/backend/internal/usecase/post"
 	userusecase "github.com/fuju/backend/internal/usecase/user"
-	"github.com/fuju/backend/pkg/auth"
+	"github.com/fuju/backend/pkg/authcore"
 	"github.com/fuju/backend/pkg/logger"
 	"github.com/fuju/backend/pkg/storage"
 )
 
+// Version is the release identifier, overridden at build time via
+// `-ldflags "-X main.Version=..."`. Defaults to "dev" for local builds.
+// BuildTime is the UTC timestamp of the binary's build, also injected
+// via ldflags. "unknown" until set by the release pipeline.
 var (
 	Version   = "dev"
 	BuildTime = "unknown"
 )
 
 func main() {
-	// Load configuration
 	cfg, err := config.Load()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Initialize logger
 	log := logger.New(cfg.LogLevel)
-	ctx := context.Background()
+	ctx, cancelBackground := context.WithCancel(context.Background())
+	defer cancelBackground()
 
 	log.Info(ctx, "Starting FUJU Backend Server",
 		"version", Version,
@@ -46,47 +49,43 @@ func main() {
 		"environment", cfg.Environment,
 	)
 
-	// Initialize repositories (in-memory for now)
+	// Repositories (in-memory for now).
 	userRepo := inmemory.NewUserRepository()
 	postRepo := inmemory.NewPostRepository()
 	commentRepo := inmemory.NewCommentRepository()
 
-	// Initialize token manager
-	tokenManager := auth.NewTokenManager(
-		cfg.JWTSecret,
-		time.Duration(cfg.JWTExpiration)*time.Second,
-		time.Duration(cfg.JWTExpiration*2)*time.Second,
-	)
+	// AuthCore client + short-lived introspection cache.
+	authcoreClient := authcore.New(authcore.Options{
+		BaseURL:        cfg.AuthCoreBaseURL,
+		ClientID:       cfg.AuthCoreClientID,
+		ClientSecret:   cfg.AuthCoreClientSecret,
+		IntrospectPath: cfg.AuthCoreIntrospectPath,
+		ProfilePath:    cfg.AuthCoreProfilePath,
+	})
+	cachedAuthCore := authcore.NewIntrospectCache(authcoreClient, cfg.AuthCoreIntrospectCacheTTL)
+	cachedAuthCore.StartJanitor(ctx, cfg.AuthCoreIntrospectCacheTTL)
 
-	// Create HTTP mux
-	mux := http.NewServeMux()
-
-	// Initialize handlers
-	healthHandler := handler.NewHealthHandler()
-
-	// User handlers
+	// Use cases
 	userGetUC := userusecase.NewGetUserUseCase(userRepo)
-	userCreateUC := userusecase.NewCreateUserUseCase(userRepo)
-	userUpdateUC := userusecase.NewUpdateUserUseCase(userRepo)
+	userHydrateUC := userusecase.NewGetOrHydrateUserUseCase(userRepo, cachedAuthCore, cfg.AuthCoreProfileTTL, log)
+	userUpdateUC := userusecase.NewUpdateUserProfileUseCase(userRepo)
 	userListUC := userusecase.NewListUsersUseCase(userRepo)
-	userHandler := handler.NewUserHandler(userGetUC, userCreateUC, userUpdateUC, userListUC)
 
-	// Post handlers
 	postGetUC := postusecase.NewGetPostUseCase(postRepo)
 	postCreateUC := postusecase.NewCreatePostUseCase(postRepo)
 	postDeleteUC := postusecase.NewDeletePostUseCase(postRepo)
 	postListUC := postusecase.NewListPostsUseCase(postRepo)
-	postHandler := handler.NewPostHandler(postGetUC, postCreateUC, postDeleteUC, postListUC)
 
-	// Comment handlers
 	commentAddUC := commentusecase.NewAddCommentUseCase(commentRepo, postRepo)
 	commentDeleteUC := commentusecase.NewDeleteCommentUseCase(commentRepo, postRepo)
+
+	// Handlers
+	healthHandler := handler.NewHealthHandler()
+	userHandler := handler.NewUserHandler(userGetUC, userUpdateUC, userListUC, userHydrateUC)
+	postHandler := handler.NewPostHandler(postGetUC, postCreateUC, postDeleteUC, postListUC)
 	commentHandler := handler.NewCommentHandlerImpl(commentAddUC, commentDeleteUC)
 
-	// Authentication handler
-	authHandler := handler.NewAuthHandler(cfg.OAuthClientID, cfg.OAuthRedirectURL, cfg.FrontendURL, tokenManager, log)
-
-	// Image handlers
+	// Optional R2 / image handlers.
 	imageRepo := inmemory.NewImageRepository()
 	r2Service, err := storage.NewR2Service()
 	if err != nil {
@@ -101,68 +100,51 @@ func main() {
 		imageHandler = handler.NewImageHandler(uploadImageUC, getUserImagesUC, deleteImageUC)
 	}
 
-	// Register routes
+	// Middleware chain for authenticated routes: AuthMiddleware (introspect
+	// Bearer token + set sub + set access token) followed by
+	// HydrateUserMiddleware (load / upsert user row).
+	authMW := middleware.AuthMiddleware(cachedAuthCore)
+	hydrateMW := middleware.HydrateUserMiddleware(userHydrateUC)
+	authed := func(next http.Handler) http.Handler {
+		return authMW(hydrateMW(next))
+	}
+
+	mux := http.NewServeMux()
+
 	// Health
 	mux.HandleFunc("GET /health", healthHandler.Health)
 
-	// Authentication
-	mux.HandleFunc("POST /auth/oauth/authorize", authHandler.OAuthAuthorize)
-	mux.HandleFunc("GET /auth/oauth/callback", authHandler.OAuthCallback)
-	mux.HandleFunc("POST /auth/oauth/callback", authHandler.OAuthCallback)
-	mux.HandleFunc("POST /auth/refresh", authHandler.RefreshToken)
-	mux.HandleFunc("POST /auth/logout", middleware.AuthMiddleware(tokenManager)(
-		http.HandlerFunc(authHandler.Logout),
-	).ServeHTTP)
+	// Me: authenticated caller's own record (lazy-created / hydrated).
+	mux.Handle("GET /me", authed(http.HandlerFunc(userHandler.Me)))
 
 	// Users
 	mux.HandleFunc("GET /users", userHandler.ListUsers)
-	mux.HandleFunc("POST /users", middleware.AuthMiddleware(tokenManager)(
-		http.HandlerFunc(userHandler.CreateUser),
-	).ServeHTTP)
-	mux.HandleFunc("GET /users/{id}", userHandler.GetUser)
-	mux.HandleFunc("PUT /users/{id}", middleware.AuthMiddleware(tokenManager)(
-		http.HandlerFunc(userHandler.UpdateUser),
-	).ServeHTTP)
+	mux.HandleFunc("GET /users/{sub}", userHandler.GetUser)
+	mux.Handle("PUT /users/{sub}", authed(http.HandlerFunc(userHandler.UpdateUser)))
 
 	// Posts
 	mux.HandleFunc("GET /posts", postHandler.ListPosts)
-	mux.HandleFunc("POST /posts", middleware.AuthMiddleware(tokenManager)(
-		http.HandlerFunc(postHandler.CreatePost),
-	).ServeHTTP)
+	mux.Handle("POST /posts", authed(http.HandlerFunc(postHandler.CreatePost)))
 	mux.HandleFunc("GET /posts/{id}", postHandler.GetPost)
-	mux.HandleFunc("DELETE /posts/{id}", middleware.AuthMiddleware(tokenManager)(
-		http.HandlerFunc(postHandler.DeletePost),
-	).ServeHTTP)
+	mux.Handle("DELETE /posts/{id}", authed(http.HandlerFunc(postHandler.DeletePost)))
 
 	// Comments
-	mux.HandleFunc("POST /posts/{id}/comments", middleware.AuthMiddleware(tokenManager)(
-		http.HandlerFunc(commentHandler.AddComment),
-	).ServeHTTP)
-	mux.HandleFunc("DELETE /posts/{post_id}/comments/{comment_id}", middleware.AuthMiddleware(tokenManager)(
-		http.HandlerFunc(commentHandler.DeleteComment),
-	).ServeHTTP)
+	mux.Handle("POST /posts/{id}/comments", authed(http.HandlerFunc(commentHandler.AddComment)))
+	mux.Handle("DELETE /posts/{post_id}/comments/{comment_id}", authed(http.HandlerFunc(commentHandler.DeleteComment)))
 
-	// Images (if R2 is configured)
+	// Images (only if R2 configured)
 	if imageHandler != nil {
-		mux.HandleFunc("POST /v1/images", middleware.AuthMiddleware(tokenManager)(
-			http.HandlerFunc(imageHandler.UploadImage),
-		).ServeHTTP)
-		mux.HandleFunc("GET /v1/images", middleware.AuthMiddleware(tokenManager)(
-			http.HandlerFunc(imageHandler.GetUserImages),
-		).ServeHTTP)
-		mux.HandleFunc("DELETE /v1/images/{id}", middleware.AuthMiddleware(tokenManager)(
-			http.HandlerFunc(imageHandler.DeleteImage),
-		).ServeHTTP)
+		mux.Handle("POST /v1/images", authed(http.HandlerFunc(imageHandler.UploadImage)))
+		mux.Handle("GET /v1/images", authed(http.HandlerFunc(imageHandler.GetUserImages)))
+		mux.Handle("DELETE /v1/images/{id}", authed(http.HandlerFunc(imageHandler.DeleteImage)))
 	}
 
-	// Apply global middleware
 	var apiHandler http.Handler = mux
 	apiHandler = middleware.CORSMiddleware(cfg.CORSAllowedOrigins)(apiHandler)
 	apiHandler = middleware.RecoveryMiddleware(log)(apiHandler)
 	apiHandler = middleware.LoggingMiddleware(log)(apiHandler)
 	apiHandler = middleware.ContextTimeoutMiddleware(30 * time.Second)(apiHandler)
 
-	// Create HTTP server
 	server := &http.Server{
 		Addr:         fmt.Sprintf(":%d", cfg.ServerPort),
 		Handler:      apiHandler,
@@ -171,7 +153,6 @@ func main() {
 		IdleTimeout:  60 * time.Second,
 	}
 
-	// Start server in a goroutine
 	go func() {
 		log.Info(ctx, "HTTP server listening",
 			"port", cfg.ServerPort,
@@ -185,7 +166,6 @@ func main() {
 		}
 	}()
 
-	// Graceful shutdown
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
@@ -193,7 +173,6 @@ func main() {
 
 	log.Info(ctx, "Shutting down server...")
 
-	// Create shutdown context with timeout
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

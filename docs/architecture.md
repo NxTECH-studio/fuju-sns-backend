@@ -35,7 +35,7 @@ FUJU Backend is a SNS (Social Network Service) backend built in Go following Cle
 ├─────────────────────────────────┤
 │  Domain (Entities & Rules)      │  <- Core Business Logic
 ├─────────────────────────────────┤
-│  External (DB, Cache, OAuth)    │  <- External Systems
+│  External (DB, Cache, AuthCore) │  <- External Systems
 └─────────────────────────────────┘
 ```
 
@@ -45,7 +45,7 @@ FUJU Backend is a SNS (Social Network Service) backend built in Go following Cle
    - Pure business entities and value objects
    - Domain-specific rules and validations
    - No external dependencies
-   - Examples: `User`, `Post`, `Comment` entities
+   - Examples: `User` (AuthCore mirror + SNS-owned fields), `Post` entities
 
 2. **Repository Layer** (`internal/repository/`)
    - Data persistence abstraction
@@ -80,35 +80,31 @@ backend/
 │       └── main.go                    # Application entry point
 ├── internal/
 │   ├── domain/
-│   │   ├── user.go                    # User entity & interfaces
+│   │   ├── user.go                    # User entity (AuthCore mirror + SNS fields)
 │   │   ├── post.go                    # Post entity & interfaces
-│   │   ├── comment.go                 # Comment entity & interfaces
+│   │   ├── image.go                   # Image entity & storage interface
 │   │   ├── repository.go              # Repository interfaces
 │   │   └── errors.go                  # Domain-specific errors
 │   ├── usecase/
 │   │   ├── user/
-│   │   │   ├── create_user.go
 │   │   │   ├── get_user.go
+│   │   │   ├── get_or_hydrate_user.go
+│   │   │   ├── update_user_profile.go
 │   │   │   └── list_users.go
-│   │   ├── post/
-│   │   │   ├── create_post.go
-│   │   │   ├── get_post.go
-│   │   │   └── list_posts.go
-│   │   └── auth/
-│   │       ├── oauth_callback.go
-│   │       ├── create_session.go
-│   │       └── refresh_token.go
+│   │   └── post/
+│   │       ├── create_post.go
+│   │       ├── get_post.go
+│   │       └── list_posts.go
 │   ├── repository/
 │   │   ├── user_repository.go         # PostgreSQL implementation
-│   │   ├── post_repository.go
-│   │   └── comment_repository.go
+│   │   └── post_repository.go
 │   ├── handler/
 │   │   ├── user_handler.go
 │   │   ├── post_handler.go
-│   │   ├── auth_handler.go
 │   │   └── health_handler.go
 │   └── middleware/
-│       ├── auth.go                    # OAuth2 & JWT validation
+│       ├── auth.go                    # AuthCore introspection
+│       ├── hydrate.go                 # Lazy-create / TTL-refresh user row
 │       ├── logging.go                 # Request logging
 │       ├── cors.go                    # CORS handling
 │       └── recovery.go                # Panic recovery
@@ -126,10 +122,9 @@ backend/
 │   ├── cache/
 │   │   ├── redis.go                   # Redis client wrapper
 │   │   └── cache_key.go               # Cache key management
-│   └── auth/
-│       ├── oauth.go                   # OAuth2 client config
-│       ├── jwt.go                     # JWT token handling
-│       └── session.go                 # Session (Cookie) management
+│   └── authcore/
+│       ├── client.go                  # AuthCore HTTP client (Introspect / GetProfile)
+│       └── cache.go                   # 30s in-memory introspection cache
 ├── config/
 │   └── config.go                      # Configuration management
 ├── docs/
@@ -149,53 +144,53 @@ backend/
 
 ## Authentication Strategy
 
-### Web Application (Browser-based)
+Identity and session state are owned by **AuthCore**, a separate service.
+The SNS backend does not issue, rotate, or validate credentials of its own;
+it treats every request as anonymous until AuthCore tells it otherwise. The
+`users` table is a mirror keyed by AuthCore's `sub` (ULID) plus a small set
+of SNS-owned fields (`bio`, `banner_url`, `is_admin`).
 
-**Flow:**
-1. User initiates OAuth2 login
-2. Backend redirects to OAuth2 provider (e.g., Google, GitHub)
-3. OAuth2 provider redirects back with authorization code
-4. Backend exchanges code for access token
-5. Backend creates session (HttpOnly, Secure Cookie)
-6. Frontend stores nothing sensitive; relies on HTTP-Only cookies
+### Request flow
 
-**Security Considerations:**
-- CSRF tokens for state validation
-- HttpOnly + Secure + SameSite=Strict cookies
-- Session timeout and renewal
-- Refresh token rotation
+1. The browser holds an opaque session cookie issued by AuthCore
+   (`AUTHCORE_SESSION_COOKIE_NAME`, default `authcore_session`).
+2. `AuthMiddleware` reads the cookie and calls AuthCore's introspection
+   endpoint (`POST {AUTHCORE_BASE_URL}{AUTHCORE_INTROSPECT_PATH}`) with a
+   service bearer token to resolve the `sub` and expiry.
+3. Results are held in an in-memory cache (`AUTHCORE_INTROSPECT_CACHE_TTL`,
+   default 30s) keyed on the cookie value so AuthCore is not hit on every
+   API call.
+4. `HydrateUserMiddleware` looks up the `users` row for `sub`. If missing,
+   the row is lazy-created from `GetProfile`. If older than
+   `AUTHCORE_PROFILE_TTL` (default 1h) the cached profile fields are
+   refreshed. The resolved `*domain.User` is attached to the context.
+5. Handlers read the caller via `auth.GetSubFromContext` /
+   `auth.GetCurrentUserFromContext`.
 
-### Mobile Application
+### Two layers of AuthCore traffic
 
-**Flow:**
-1. Mobile app handles OAuth2 login (using embedded browser or deep linking)
-2. OAuth2 provider returns authorization code to app
-3. App sends code to backend
-4. Backend exchanges code for tokens
-5. Backend returns JWT (short-lived) + Refresh Token (long-lived)
-6. Mobile app stores JWT in Keychain/Keysafe (encrypted storage)
-7. Mobile app includes JWT in Authorization header
+| Layer | Purpose | Frequency | TTL |
+|---|---|---|---|
+| Introspection | Is the cookie valid? Who is `sub`? | Every authenticated request | 30s in-memory cache |
+| Profile hydration | Pull DisplayName / DisplayID / IconURL | On lazy-create or when the mirror row is older than 1h | 1h (tracked via `profile_refreshed_at`) |
 
-**Security Considerations:**
-- JWT with short expiration (15-30 minutes)
-- Refresh token with longer expiration (7-30 days)
-- Refresh token invalidation on logout
-- Secure storage using OS keychain
-- Token rotation on refresh
+### Failure modes
 
-### Token Validation Middleware
+- **Introspection**: fail-closed. An unreachable AuthCore returns 503; a
+  401/403 returns 401. A fresh (≤30s) cache entry absorbs short upstream
+  blips.
+- **Profile hydration**: fail-open. On error the existing `*_cached` fields
+  are returned and `profile_refreshed_at` is left stale so the next request
+  retries. The first hydrate after lazy-create may insert blank cached
+  fields; subsequent requests fix them.
+
+### Context helpers
 
 ```
-For Web:
-  - Read session cookie
-  - Validate session in Redis
-  - Attach user context
-
-For Mobile:
-  - Parse JWT from Authorization header
-  - Validate JWT signature
-  - Check token expiration
-  - Attach user context
+ctx := auth.SetSubInContext(r.Context(), session.Sub)           // AuthMiddleware
+ctx  = auth.SetCurrentUserInContext(ctx, user)                  // HydrateUserMiddleware
+sub, ok   := auth.GetSubFromContext(r.Context())
+user, ok  := auth.GetCurrentUserFromContext(r.Context())
 ```
 
 ---
@@ -205,73 +200,81 @@ For Mobile:
 ### Technology Stack
 
 - **Primary DB**: PostgreSQL 13+
-- **Caching**: Redis (sessions, tokens, frequently accessed data)
+- **Caching**: Redis (frequently accessed data; session state lives in AuthCore)
 - **Connection Pool**: `database/sql` with optimized pool settings
+
+### Identifiers
+
+All primary keys and foreign keys are ULIDs stored as `CHAR(26)`
+(Crockford Base32). `users.sub` comes from AuthCore; every other ULID is
+generated in the application layer (`ulid.Make().String()`) before the
+INSERT.
 
 ### Core Tables
 
 #### users
+
+Mirror of AuthCore identity plus SNS-owned profile fields. The `*_cached`
+columns are refreshed with a 1h TTL via `profile_refreshed_at`. `bio`,
+`banner_url` and `is_admin` are owned by this service.
+
 ```sql
 CREATE TABLE users (
-  id BIGSERIAL PRIMARY KEY,
-  username VARCHAR(255) UNIQUE NOT NULL,
-  email VARCHAR(255) UNIQUE NOT NULL,
-  display_name VARCHAR(255),
-  bio TEXT,
-  avatar_url VARCHAR(1024),
-  oauth_provider VARCHAR(50) NOT NULL, -- 'google', 'github', etc.
-  oauth_id VARCHAR(255) NOT NULL,
-  UNIQUE(oauth_provider, oauth_id),
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  deleted_at TIMESTAMP NULL -- Soft delete
+  sub                   CHAR(26)      PRIMARY KEY,
+  display_name_cached   VARCHAR(255)  NOT NULL DEFAULT '',
+  display_id_cached     VARCHAR(64)   NOT NULL DEFAULT '',
+  icon_url_cached       VARCHAR(1024) NOT NULL DEFAULT '',
+  profile_refreshed_at  TIMESTAMPTZ   NOT NULL DEFAULT '1970-01-01',
+  bio                   TEXT          NOT NULL DEFAULT '',
+  banner_url            VARCHAR(1024) NOT NULL DEFAULT '',
+  is_admin              BOOLEAN       NOT NULL DEFAULT false,
+  created_at            TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  updated_at            TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+  deleted_at            TIMESTAMPTZ   NULL
 );
 ```
 
 #### posts
 ```sql
 CREATE TABLE posts (
-  id BIGSERIAL PRIMARY KEY,
-  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  content TEXT NOT NULL,
-  image_urls TEXT[], -- JSON array or separate table
-  likes_count INT DEFAULT 0,
-  comments_count INT DEFAULT 0,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  deleted_at TIMESTAMP NULL
+  id          CHAR(26)    PRIMARY KEY,
+  user_id     CHAR(26)    NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+  content     TEXT        NOT NULL,
+  image_urls  JSONB       NOT NULL DEFAULT '[]'::jsonb,
+  likes_count INT         NOT NULL DEFAULT 0,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at  TIMESTAMPTZ NULL
 );
 ```
 
-#### comments
+#### comments (transitional)
+
+Retained with ULID-typed keys only as a bridge. The post feature task
+(`02-implement-post-feature.md`) folds comments into post replies and
+drops this table.
+
 ```sql
 CREATE TABLE comments (
-  id BIGSERIAL PRIMARY KEY,
-  post_id BIGINT NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
-  user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  content TEXT NOT NULL,
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  deleted_at TIMESTAMP NULL
+  id         CHAR(26)    PRIMARY KEY,
+  post_id    CHAR(26)    NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+  user_id    CHAR(26)    NOT NULL REFERENCES users(sub) ON DELETE CASCADE,
+  content    TEXT        NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  deleted_at TIMESTAMPTZ NULL
 );
-```
-
-#### sessions (Redis keys or optional table)
-```
-Key: session:{session_id}
-Value: {user_id, created_at, expires_at}
-TTL: Session duration
 ```
 
 ### Indexing Strategy
 
 ```sql
-CREATE INDEX idx_users_email ON users(email);
-CREATE INDEX idx_users_oauth ON users(oauth_provider, oauth_id);
-CREATE INDEX idx_posts_user_id ON posts(user_id);
-CREATE INDEX idx_posts_created_at ON posts(created_at DESC);
-CREATE INDEX idx_comments_post_id ON comments(post_id);
-CREATE INDEX idx_comments_user_id ON comments(user_id);
+CREATE INDEX idx_users_profile_refreshed_at ON users(profile_refreshed_at);
+CREATE INDEX idx_users_display_id_cached    ON users(display_id_cached);
+CREATE INDEX idx_posts_user_id              ON posts(user_id);
+CREATE INDEX idx_posts_created_at           ON posts(created_at DESC);
+CREATE INDEX idx_comments_post_id           ON comments(post_id);
+CREATE INDEX idx_comments_user_id           ON comments(user_id);
 ```
 
 ---
@@ -283,78 +286,29 @@ CREATE INDEX idx_comments_user_id ON comments(user_id);
 https://api.fuju.local/v1
 ```
 
-### Authentication Endpoints
+Authentication is handled by AuthCore; this backend exposes no
+`/auth/*` endpoints. Authenticated requests carry AuthCore's session
+cookie, which the middleware introspects on every call.
 
-#### POST /auth/oauth/authorize
-Initiates OAuth2 authorization flow.
+### Me Endpoint
 
-```
-Response:
-{
-  "redirect_url": "https://provider.example.com/oauth/authorize?..."
-}
-```
-
-#### POST /auth/oauth/callback
-Handles OAuth2 callback.
-
-```
-Request:
-{
-  "code": "authorization_code",
-  "state": "state_token"
-}
-
-Response (Web):
-{
-  "session_id": "session_xxx"
-}
-Cookies: session_id (HttpOnly, Secure)
-
-Response (Mobile):
-{
-  "access_token": "jwt_token",
-  "refresh_token": "refresh_token",
-  "expires_in": 1800
-}
-```
-
-#### POST /auth/refresh
-Refresh access token (Mobile).
-
-```
-Request:
-{
-  "refresh_token": "refresh_token"
-}
-
-Response:
-{
-  "access_token": "new_jwt_token",
-  "expires_in": 1800
-}
-```
-
-#### POST /auth/logout
-Logout and invalidate session/token.
-
-```
-Response:
-{
-  "status": "success"
-}
-```
+#### GET /me
+Return the authenticated caller's own user record. The row is
+lazy-created on first call and its cached profile fields are refreshed
+from AuthCore when older than 1h. Requires auth.
 
 ### User Endpoints
 
-#### GET /users/{id}
-Get user profile.
+#### GET /users
+List users with pagination.
 
-#### POST /users
-Create user profile (requires auth).
+#### GET /users/{sub}
+Get a user profile by AuthCore `sub` (ULID).
 
-#### PUT /users/{id}
-Update user profile (requires auth).
+#### PUT /users/{sub}
+Update SNS-owned profile fields. Only `bio` and `banner_url` are
+accepted; identity and AuthCore-cached fields cannot be mutated here.
+Callers can only update their own profile. Requires auth.
 
 ### Post Endpoints
 
@@ -370,13 +324,12 @@ Get post details.
 #### DELETE /posts/{id}
 Delete post (owner only).
 
-### Comment Endpoints
+### Comment Endpoints (transitional)
 
-#### POST /posts/{id}/comments
-Add comment (requires auth).
-
-#### DELETE /posts/{id}/comments/{comment_id}
-Delete comment (owner only).
+`POST /posts/{id}/comments` and `DELETE /posts/{post_id}/comments/{comment_id}`
+exist as a bridge and will be replaced by post replies in the post
+feature task (`02-implement-post-feature.md`). Treat them as deprecated
+in new work.
 
 ---
 
@@ -433,10 +386,10 @@ Example log:
   "timestamp": "2026-04-14T10:30:00Z",
   "level": "INFO",
   "request_id": "req_12345",
-  "user_id": 1,
-  "message": "User login successful",
-  "method": "POST",
-  "path": "/auth/callback",
+  "sub": "01HX4Y6Q9M8T3F2B1C0D7R5A9K",
+  "message": "User loaded from hydrate",
+  "method": "GET",
+  "path": "/me",
   "status": 200,
   "duration_ms": 145
 }
@@ -464,7 +417,7 @@ Example log:
 2. **Function Signatures**
    - Accept context as first parameter
    - Return value + error as last return values
-   - `func (u *UserService) GetUser(ctx context.Context, id int64) (*User, error)`
+   - `func (u *UserService) GetUser(ctx context.Context, sub string) (*User, error)`
 
 3. **Error Handling**
    - Use custom `AppError` for domain errors
@@ -496,12 +449,11 @@ Types: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`
 
 Example:
 ```
-feat: Add OAuth2 callback handler
+feat: Add AuthCore introspection middleware
 
-Implements OAuth2 authorization code flow for both web and mobile.
-- Exchange authorization code for tokens
-- Create session for web clients
-- Return JWT for mobile clients
+Validates the AuthCore session cookie on every authenticated request
+and attaches the resolved sub to the request context. Results are
+memoised in a 30s in-memory cache.
 
 Closes #123
 ```
@@ -513,11 +465,11 @@ Closes #123
 ### Environment Configuration
 
 Managed via `.env` and environment variables (production uses secrets):
-- `DB_HOST`, `DB_PORT`, `DB_NAME`
+- `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
 - `REDIS_URL`
-- `OAUTH_CLIENT_ID`, `OAUTH_CLIENT_SECRET`
-- `JWT_SECRET`
-- `SESSION_SECRET`
+- `AUTHCORE_BASE_URL`, `AUTHCORE_SERVICE_TOKEN`
+- `AUTHCORE_SESSION_COOKIE_NAME`, `AUTHCORE_INTROSPECT_PATH`
+- `AUTHCORE_PROFILE_TTL`, `AUTHCORE_INTROSPECT_CACHE_TTL`
 - `ENVIRONMENT` (development, staging, production)
 
 ### Docker Support
@@ -534,12 +486,12 @@ Multi-stage build for minimal image size. See `Dockerfile` (to be added).
 
 ## Future Enhancements
 
-1. **Passkey Authentication**: WebAuthn support in addition to OAuth2
-2. **GraphQL API**: Alternative API layer
-3. **Real-time Features**: WebSocket support for notifications
-4. **Message Queue**: Event-driven architecture with message queue
-5. **Microservices**: Potential to split into separate services
-6. **Analytics**: User engagement tracking and insights
+1. **GraphQL API**: Alternative API layer
+2. **Real-time Features**: WebSocket support for notifications
+3. **Message Queue**: Event-driven architecture with message queue
+4. **Microservices**: Potential to split into separate services
+5. **Analytics**: User engagement tracking and insights
+6. **Redis-backed introspection cache**: move the 30s AuthCore cache out of process
 
 ---
 

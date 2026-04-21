@@ -4,6 +4,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -19,132 +20,159 @@ const (
 	ContentTypeJSON = "application/json"
 )
 
-// UserHandler contains handlers for user endpoints
+// ulidPattern validates a ULID (26 chars of Crockford Base32).
+var ulidPattern = regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]{26}$`)
+
+// UserHandler contains handlers for user endpoints.
 type UserHandler struct {
-	getUser    *userusecase.GetUserUseCase
-	createUser *userusecase.CreateUserUseCase
-	updateUser *userusecase.UpdateUserUseCase
-	listUsers  *userusecase.ListUsersUseCase
+	getUser     *userusecase.GetUserUseCase
+	updateUser  *userusecase.UpdateUserProfileUseCase
+	listUsers   *userusecase.ListUsersUseCase
+	hydrateUser *userusecase.GetOrHydrateUserUseCase
 }
 
-// NewUserHandler creates a new UserHandler
+// NewUserHandler creates a new UserHandler.
 func NewUserHandler(
 	getUser *userusecase.GetUserUseCase,
-	createUser *userusecase.CreateUserUseCase,
-	updateUser *userusecase.UpdateUserUseCase,
+	updateUser *userusecase.UpdateUserProfileUseCase,
 	listUsers *userusecase.ListUsersUseCase,
+	hydrateUser *userusecase.GetOrHydrateUserUseCase,
 ) *UserHandler {
 	return &UserHandler{
-		getUser:    getUser,
-		createUser: createUser,
-		updateUser: updateUser,
-		listUsers:  listUsers,
+		getUser:     getUser,
+		updateUser:  updateUser,
+		listUsers:   listUsers,
+		hydrateUser: hydrateUser,
 	}
 }
 
-// GetUser handles GET /users/{id}
+// publicUserView strips admin-only fields from a user record for public
+// endpoints (e.g., looking up someone else's profile).
+type publicUserView struct {
+	Sub                string     `json:"sub"`
+	DisplayNameCached  string     `json:"display_name"`
+	DisplayIDCached    string     `json:"display_id"`
+	IconURLCached      string     `json:"icon_url"`
+	Bio                string     `json:"bio"`
+	BannerURL          string     `json:"banner_url"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+	DeletedAt          *time.Time `json:"deleted_at,omitempty"`
+	ProfileRefreshedAt time.Time  `json:"profile_refreshed_at"`
+}
+
+// selfUserView is the view returned for the caller's own identity (/me,
+// profile update responses). It includes the is_admin flag.
+type selfUserView struct {
+	publicUserView
+	IsAdmin bool `json:"is_admin"`
+}
+
+func toPublicView(u *domain.User) publicUserView {
+	return publicUserView{
+		Sub:                u.Sub,
+		DisplayNameCached:  u.DisplayNameCached,
+		DisplayIDCached:    u.DisplayIDCached,
+		IconURLCached:      u.IconURLCached,
+		Bio:                u.Bio,
+		BannerURL:          u.BannerURL,
+		CreatedAt:          u.CreatedAt,
+		UpdatedAt:          u.UpdatedAt,
+		DeletedAt:          u.DeletedAt,
+		ProfileRefreshedAt: u.ProfileRefreshedAt,
+	}
+}
+
+func toSelfView(u *domain.User) selfUserView {
+	return selfUserView{publicUserView: toPublicView(u), IsAdmin: u.IsAdmin}
+}
+
+// GetUser handles GET /users/{sub}.
 func (h *UserHandler) GetUser(w http.ResponseWriter, r *http.Request) {
-	userID, ok := parseUserIDFromPath(w, r)
+	sub, ok := parseSubFromPath(w, r, "sub")
 	if !ok {
 		return
 	}
 
-	user, err := h.getUser.Execute(r.Context(), userID)
+	user, err := h.getUser.Execute(r.Context(), sub)
 	if err != nil {
 		WriteErrorResponse(w, err)
 		return
 	}
 
-	WriteSuccessResponse(w, user, http.StatusOK)
+	WriteSuccessResponse(w, toPublicView(user), http.StatusOK)
 }
 
-// CreateUser handles POST /users
-func (h *UserHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
-	if !isAuthenticatedUser(w, r) {
+// Me handles GET /me — returns the authenticated user's full (self) view.
+// Requires AuthMiddleware to have populated the sub on the context.
+func (h *UserHandler) Me(w http.ResponseWriter, r *http.Request) {
+	if user, ok := auth.GetCurrentUserFromContext(r.Context()); ok {
+		WriteSuccessResponse(w, toSelfView(user), http.StatusOK)
 		return
 	}
 
-	req, ok := parseCreateUserRequest(w, r)
-	if !ok {
-		return
-	}
-
-	user, err := h.createUser.Execute(r.Context(), req)
-	if err != nil {
-		WriteErrorResponse(w, err)
-		return
-	}
-
-	WriteSuccessResponse(w, user, http.StatusCreated)
-}
-
-// isAuthenticatedUser checks if the request has valid authentication
-func isAuthenticatedUser(w http.ResponseWriter, r *http.Request) bool {
-	_, ok := auth.GetUserIDFromContext(r.Context())
+	sub, ok := auth.GetSubFromContext(r.Context())
 	if !ok {
 		WriteErrorResponse(w, errors.Unauthorized("authentication required"))
-		return false
-	}
-	return true
-}
-
-// parseCreateUserRequest parses and validates the create user request
-func parseCreateUserRequest(w http.ResponseWriter, r *http.Request) (*domain.CreateUserRequest, bool) {
-	var req domain.CreateUserRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		WriteErrorResponse(w, errors.InvalidRequest("invalid request body", err))
-		return nil, false
-	}
-	return &domain.CreateUserRequest{
-		Username:    req.Username,
-		Email:       req.Email,
-		DisplayName: req.DisplayName,
-		Bio:         req.Bio,
-		AvatarURL:   req.AvatarURL,
-	}, true
-}
-
-// UpdateUser handles PUT /users/{id}
-func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
-	userID, ok := parseUserIDFromPath(w, r)
-	if !ok {
 		return
 	}
 
-	if !isAuthenticatedUser(w, r) {
-		return
-	}
-
-	currentUserID, _ := auth.GetUserIDFromContext(r.Context())
-
-	req, ok := parseUpdateUserRequest(w, r)
-	if !ok {
-		return
-	}
-
-	user, err := h.updateUser.Execute(r.Context(), userID, currentUserID, req)
+	user, err := h.hydrateUser.Execute(r.Context(), sub)
 	if err != nil {
 		WriteErrorResponse(w, err)
 		return
 	}
 
-	WriteSuccessResponse(w, user, http.StatusOK)
+	WriteSuccessResponse(w, toSelfView(user), http.StatusOK)
 }
 
-// parseUserIDFromPath extracts and parses the user ID from URL path
-func parseUserIDFromPath(w http.ResponseWriter, r *http.Request) (int64, bool) {
-	userIDStr := r.PathValue("id")
-	userID, err := strconv.ParseInt(userIDStr, 10, 64)
-	if err != nil {
-		WriteErrorResponse(w, errors.InvalidRequest("invalid user ID", err))
-		return 0, false
+// UpdateUser handles PUT /users/{sub} — only the authenticated user can
+// modify their own profile, and only bio / banner_url are writable.
+func (h *UserHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
+	sub, ok := parseSubFromPath(w, r, "sub")
+	if !ok {
+		return
 	}
-	return userID, true
+
+	currentSub, ok := auth.GetSubFromContext(r.Context())
+	if !ok {
+		WriteErrorResponse(w, errors.Unauthorized("authentication required"))
+		return
+	}
+
+	req, ok := parseUpdateProfileRequest(w, r)
+	if !ok {
+		return
+	}
+
+	user, err := h.updateUser.Execute(r.Context(), sub, currentSub, req)
+	if err != nil {
+		WriteErrorResponse(w, err)
+		return
+	}
+
+	WriteSuccessResponse(w, toSelfView(user), http.StatusOK)
 }
 
-// parseUpdateUserRequest parses and validates the update user request
-func parseUpdateUserRequest(w http.ResponseWriter, r *http.Request) (*domain.UpdateUserRequest, bool) {
-	var req domain.UpdateUserRequest
+// parseSubFromPath extracts a sub (ULID) from a path variable with format
+// validation.
+func parseSubFromPath(w http.ResponseWriter, r *http.Request, name string) (string, bool) {
+	return parseULIDFromPath(w, r, name, "invalid sub (expected ULID)")
+}
+
+// parseULIDFromPath extracts a ULID-typed path variable with format
+// validation, writing a 400 with the given label on failure.
+func parseULIDFromPath(w http.ResponseWriter, r *http.Request, name, errLabel string) (string, bool) {
+	value := r.PathValue(name)
+	if !ulidPattern.MatchString(value) {
+		WriteErrorResponse(w, errors.InvalidRequest(errLabel, nil))
+		return "", false
+	}
+	return value, true
+}
+
+func parseUpdateProfileRequest(w http.ResponseWriter, r *http.Request) (*domain.UpdateUserProfileRequest, bool) {
+	var req domain.UpdateUserProfileRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		WriteErrorResponse(w, errors.InvalidRequest("invalid request body", err))
 		return nil, false
@@ -152,7 +180,7 @@ func parseUpdateUserRequest(w http.ResponseWriter, r *http.Request) (*domain.Upd
 	return &req, true
 }
 
-// ListUsers handles GET /users
+// ListUsers handles GET /users.
 func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	limit, offset := parsePaginationParams(r)
 
@@ -162,8 +190,13 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	views := make([]publicUserView, len(users))
+	for i, u := range users {
+		views[i] = toPublicView(u)
+	}
+
 	resp := response.ListResponse{
-		Data:   users,
+		Data:   views,
 		Total:  total,
 		Limit:  limit,
 		Offset: offset,
@@ -172,7 +205,7 @@ func (h *UserHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	WriteListResponse(w, &resp, http.StatusOK)
 }
 
-// parsePaginationParams extracts limit and offset from query parameters
+// parsePaginationParams extracts limit and offset from query parameters.
 func parsePaginationParams(r *http.Request) (int, int) {
 	limit := 20
 	offset := 0
@@ -192,36 +225,31 @@ func parsePaginationParams(r *http.Request) (int, int) {
 	return limit, offset
 }
 
-// Helper functions
-
-// writeJSONResponse writes a JSON response with proper headers
+// writeJSONResponse writes a JSON response with proper headers.
 func writeJSONResponse(w http.ResponseWriter, data interface{}, statusCode int) {
 	w.Header().Set("Content-Type", ContentTypeJSON)
 	w.WriteHeader(statusCode)
-	if err := json.NewEncoder(w).Encode(data); err != nil {
-		// Log encoding error but don't stop processing
-		_ = err
-	}
+	_ = json.NewEncoder(w).Encode(data)
 }
 
-// WriteSuccessResponse writes a successful JSON response
+// WriteSuccessResponse writes a successful JSON response.
 func WriteSuccessResponse(w http.ResponseWriter, data interface{}, statusCode int) {
 	writeJSONResponse(w, response.SuccessResponse{Data: data}, statusCode)
 }
 
-// WriteListResponse writes a list response
+// WriteListResponse writes a list response.
 func WriteListResponse(w http.ResponseWriter, data *response.ListResponse, statusCode int) {
 	writeJSONResponse(w, data, statusCode)
 }
 
-// WriteErrorResponse writes an error response
+// WriteErrorResponse writes an error response.
 func WriteErrorResponse(w http.ResponseWriter, err error) {
 	statusCode := errors.ToHTTPStatus(err)
 	errResp := buildErrorResponse(err)
 	writeJSONResponse(w, errResp, statusCode)
 }
 
-// buildErrorResponse constructs an error response from an error
+// buildErrorResponse constructs an error response from an error.
 func buildErrorResponse(err error) response.ErrorResponse {
 	errResp := response.ErrorResponse{
 		Code:      errors.ErrInternal,
@@ -239,15 +267,15 @@ func buildErrorResponse(err error) response.ErrorResponse {
 	return errResp
 }
 
-// HealthHandler contains handlers for health endpoints
+// HealthHandler contains handlers for health endpoints.
 type HealthHandler struct{}
 
-// NewHealthHandler creates a new HealthHandler
+// NewHealthHandler creates a new HealthHandler.
 func NewHealthHandler() *HealthHandler {
 	return &HealthHandler{}
 }
 
-// Health handles GET /health
+// Health handles GET /health.
 func (h *HealthHandler) Health(w http.ResponseWriter, _ *http.Request) {
 	resp := response.HealthResponse{
 		Status:    "ok",

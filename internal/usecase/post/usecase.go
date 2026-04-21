@@ -7,21 +7,22 @@ import (
 	"github.com/fuju/backend/internal/domain"
 	"github.com/fuju/backend/internal/repository"
 	"github.com/fuju/backend/pkg/errors"
+	"github.com/oklog/ulid/v2"
 )
 
-// GetPostUseCase represents the use case for getting a post
+// GetPostUseCase represents the use case for getting a post.
 type GetPostUseCase struct {
 	postRepo repository.PostRepository
 }
 
-// NewGetPostUseCase creates a new GetPostUseCase
+// NewGetPostUseCase creates a new GetPostUseCase.
 func NewGetPostUseCase(postRepo repository.PostRepository) *GetPostUseCase {
 	return &GetPostUseCase{postRepo: postRepo}
 }
 
-// Execute retrieves a post by ID
-func (uc *GetPostUseCase) Execute(ctx context.Context, postID int64) (*domain.Post, error) {
-	if postID <= 0 {
+// Execute retrieves a post by ID.
+func (uc *GetPostUseCase) Execute(ctx context.Context, postID string) (*domain.Post, error) {
+	if postID == "" {
 		return nil, errors.InvalidRequest("invalid post ID", nil)
 	}
 
@@ -37,20 +38,21 @@ func (uc *GetPostUseCase) Execute(ctx context.Context, postID int64) (*domain.Po
 	return post, nil
 }
 
-// CreatePostUseCase represents the use case for creating a post
+// CreatePostUseCase represents the use case for creating a post.
 type CreatePostUseCase struct {
 	postRepo repository.PostRepository
 }
 
-// NewCreatePostUseCase creates a new CreatePostUseCase
+// NewCreatePostUseCase creates a new CreatePostUseCase.
 func NewCreatePostUseCase(postRepo repository.PostRepository) *CreatePostUseCase {
 	return &CreatePostUseCase{postRepo: postRepo}
 }
 
-// Execute creates a new post
-func (uc *CreatePostUseCase) Execute(ctx context.Context, userID int64, req *domain.CreatePostRequest) (*domain.Post, error) {
+// Execute creates a new post.
+func (uc *CreatePostUseCase) Execute(ctx context.Context, userSub string, req *domain.CreatePostRequest) (*domain.Post, error) {
 	post := &domain.Post{
-		UserID:    userID,
+		ID:        ulid.Make().String(),
+		UserID:    userSub,
 		Content:   req.Content,
 		ImageURLs: req.ImageURLs,
 	}
@@ -67,18 +69,18 @@ func (uc *CreatePostUseCase) Execute(ctx context.Context, userID int64, req *dom
 	return created, nil
 }
 
-// DeletePostUseCase represents the use case for deleting a post
+// DeletePostUseCase represents the use case for deleting a post.
 type DeletePostUseCase struct {
 	postRepo repository.PostRepository
 }
 
-// NewDeletePostUseCase creates a new DeletePostUseCase
+// NewDeletePostUseCase creates a new DeletePostUseCase.
 func NewDeletePostUseCase(postRepo repository.PostRepository) *DeletePostUseCase {
 	return &DeletePostUseCase{postRepo: postRepo}
 }
 
-// Execute deletes a post
-func (uc *DeletePostUseCase) Execute(ctx context.Context, postID int64, currentUserID int64) error {
+// Execute deletes a post.
+func (uc *DeletePostUseCase) Execute(ctx context.Context, postID, currentUserSub string) error {
 	post, err := uc.postRepo.GetByID(ctx, postID)
 	if err != nil {
 		return errors.DatabaseError("failed to get post", err)
@@ -88,7 +90,7 @@ func (uc *DeletePostUseCase) Execute(ctx context.Context, postID int64, currentU
 		return errors.NotFound("post not found")
 	}
 
-	if post.UserID != currentUserID {
+	if post.UserID != currentUserSub {
 		return errors.Forbidden("you can only delete your own posts")
 	}
 
@@ -99,18 +101,18 @@ func (uc *DeletePostUseCase) Execute(ctx context.Context, postID int64, currentU
 	return nil
 }
 
-// ListPostsUseCase represents the use case for listing posts
+// ListPostsUseCase represents the use case for listing posts.
 type ListPostsUseCase struct {
 	postRepo repository.PostRepository
 }
 
-// NewListPostsUseCase creates a new ListPostsUseCase
+// NewListPostsUseCase creates a new ListPostsUseCase.
 func NewListPostsUseCase(postRepo repository.PostRepository) *ListPostsUseCase {
 	return &ListPostsUseCase{postRepo: postRepo}
 }
 
-// Execute lists posts with pagination
-func (uc *ListPostsUseCase) Execute(ctx context.Context, userID *int64, limit, offset int) ([]*domain.Post, int, error) {
+// Execute lists posts with pagination.
+func (uc *ListPostsUseCase) Execute(ctx context.Context, userID *string, limit, offset int) ([]*domain.Post, int, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
