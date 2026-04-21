@@ -23,15 +23,6 @@ func (e *PostNotFoundError) Error() string {
 	return fmt.Sprintf("post not found: id=%s", e.ID)
 }
 
-// CommentNotFoundError indicates comment was not found.
-type CommentNotFoundError struct {
-	ID string
-}
-
-func (e *CommentNotFoundError) Error() string {
-	return fmt.Sprintf("comment not found: id=%s", e.ID)
-}
-
 // InvalidUserError indicates user validation failed.
 type InvalidUserError struct {
 	Reason string
@@ -48,15 +39,6 @@ type InvalidPostError struct {
 
 func (e *InvalidPostError) Error() string {
 	return fmt.Sprintf("invalid post: %s", e.Reason)
-}
-
-// InvalidCommentError indicates comment validation failed.
-type InvalidCommentError struct {
-	Reason string
-}
-
-func (e *InvalidCommentError) Error() string {
-	return fmt.Sprintf("invalid comment: %s", e.Reason)
 }
 
 // AccessDeniedError indicates the caller lacks permission.
