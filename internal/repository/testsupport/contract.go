@@ -806,7 +806,11 @@ func RunFollowRepositoryContract(t *testing.T, newContract Factory) {
 			if _, err := c.Follows.Create(context.Background(), sub, userA); err != nil {
 				t.Fatalf("create %s->%s: %v", sub, userA, err)
 			}
-			time.Sleep(2 * time.Millisecond)
+			// Postgres TIMESTAMPTZ is microsecond-precision, so in
+			// principle 1µs gaps would suffice, but some CI runners
+			// quantize wall-clock to the syscall timer. 10ms leaves
+			// plenty of headroom while still keeping the suite fast.
+			time.Sleep(10 * time.Millisecond)
 		}
 
 		page, next, err := c.Follows.ListFollowers(context.Background(), userA, nil, 1)
@@ -846,7 +850,11 @@ func RunFollowRepositoryContract(t *testing.T, newContract Factory) {
 			if _, err := c.Follows.Create(context.Background(), userA, sub); err != nil {
 				t.Fatalf("create A->%s: %v", sub, err)
 			}
-			time.Sleep(2 * time.Millisecond)
+			// Postgres TIMESTAMPTZ is microsecond-precision, so in
+			// principle 1µs gaps would suffice, but some CI runners
+			// quantize wall-clock to the syscall timer. 10ms leaves
+			// plenty of headroom while still keeping the suite fast.
+			time.Sleep(10 * time.Millisecond)
 		}
 
 		page, next, err := c.Follows.ListFollowing(context.Background(), userA, nil, 1)
@@ -1014,9 +1022,9 @@ func RunBadgeRepositoryContract(t *testing.T, newContract Factory) {
 		return b
 	}
 
-	t.Run("Create_duplicate_key_returns_nil", func(t *testing.T) {
+	t.Run("Create_duplicate_key_returns_nil_and_preserves_original", func(t *testing.T) {
 		c := newContract(t)
-		seedBadge(t, c, devID, "developer", "dev", 5)
+		original := seedBadge(t, c, devID, "developer", "dev", 5)
 
 		// Same key, fresh id → conflict on unique(key).
 		dup, err := c.Badges.Create(context.Background(), &domain.Badge{
@@ -1030,6 +1038,19 @@ func RunBadgeRepositoryContract(t *testing.T, newContract Factory) {
 		}
 		if dup != nil {
 			t.Fatalf("expected nil on duplicate key, got %+v", dup)
+		}
+
+		// First-writer-wins: the original row must be untouched
+		// (label / priority must not have been silently overwritten).
+		survived, err := c.Badges.GetByKey(context.Background(), "developer")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if survived == nil {
+			t.Fatalf("original row disappeared")
+		}
+		if survived.ID != original.ID || survived.Label != "dev" || survived.Priority != 5 {
+			t.Errorf("dup overwrote original: %+v", survived)
 		}
 	})
 

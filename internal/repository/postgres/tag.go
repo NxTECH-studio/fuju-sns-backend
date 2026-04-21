@@ -2,12 +2,10 @@ package postgres
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 
 	"github.com/fuju/backend/internal/domain"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/oklog/ulid/v2"
 )
@@ -87,11 +85,11 @@ func (r *TagRepository) ListByPostID(ctx context.Context, postID string) ([]*dom
 
 	var out []*domain.Tag
 	for rows.Next() {
-		t, err := scanTag(rows)
-		if err != nil {
-			return nil, err
+		var t domain.Tag
+		if err := rows.Scan(&t.ID, &t.Name, &t.CreatedAt); err != nil {
+			return nil, fmt.Errorf("postgres: scan tag: %w", err)
 		}
-		out = append(out, t)
+		out = append(out, &t)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("postgres: list tags by post iterate: %w", err)
@@ -136,15 +134,4 @@ func (r *TagRepository) ListByPostIDs(ctx context.Context, postIDs []string) (ma
 		})
 	}
 	return out, nil
-}
-
-func scanTag(row pgx.Row) (*domain.Tag, error) {
-	var t domain.Tag
-	if err := row.Scan(&t.ID, &t.Name, &t.CreatedAt); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("postgres: scan tag: %w", err)
-	}
-	return &t, nil
 }

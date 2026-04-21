@@ -92,24 +92,33 @@ func (r *BadgeRepository) GetByID(ctx context.Context, id string) (*domain.Badge
 // Create inserts a new badge master row. Returns (nil, nil) on a
 // duplicate key — matches inmemory's "first writer wins" contract so
 // the admin handler can detect the collision without a separate
-// existence check.
+// existence check. Both created_at and updated_at are stamped with
+// the DB clock via NOW() so they cannot skew against each other; the
+// caller-supplied CreatedAt is only honoured when non-zero, matching
+// the UserRepository pattern.
 func (r *BadgeRepository) Create(ctx context.Context, badge *domain.Badge) (*domain.Badge, error) {
-	createdAt := badge.CreatedAt
-	if createdAt.IsZero() {
-		createdAt = time.Now()
+	// COALESCE($8, NOW()) lets callers pass the zero time without
+	// producing a literal 0001-01-01 row; passing a real wall time
+	// still wins. This keeps the DB clock as the default writer for
+	// both timestamp columns.
+	var createdAtArg any
+	if !badge.CreatedAt.IsZero() {
+		createdAtArg = badge.CreatedAt
 	}
 	row := r.pool.QueryRow(ctx, `
 		INSERT INTO badges (id, key, label, description, icon_url, color, priority,
 		                   created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+		VALUES ($1, $2, $3, $4, $5, $6, $7, COALESCE($8, NOW()), NOW())
 		ON CONFLICT (key) DO NOTHING
 		RETURNING `+badgeSelectColumns,
 		badge.ID, badge.Key, badge.Label, badge.Description, badge.IconURL,
-		badge.Color, badge.Priority, createdAt)
+		badge.Color, badge.Priority, createdAtArg)
 	b, err := scanBadge(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			// Duplicate key → ON CONFLICT DO NOTHING produced no row.
+			// ON CONFLICT DO NOTHING produced no row. The INSERT has
+			// no WHERE clause and no trigger NO-OPs it, so this path
+			// is reached only on a key collision.
 			return nil, nil
 		}
 		return nil, fmt.Errorf("postgres: create badge: %w", err)

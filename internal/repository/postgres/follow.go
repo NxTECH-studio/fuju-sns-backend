@@ -140,31 +140,36 @@ func (r *FollowRepository) listSide(ctx context.Context, sub string, cursor *str
 	}
 	defer rows.Close()
 
+	// Consume up to limit+1 rows; the extra row (if present) is the
+	// has-more probe and signals that a cursor should be emitted.
+	// Stop appending once we have limit+1 so the returned slice never
+	// holds the sentinel — matches scanPostPage's pattern in post.go.
 	follows := make([]*domain.Follow, 0, limit)
+	hasMore := false
 	for rows.Next() {
+		if len(follows) == limit {
+			hasMore = true
+			break
+		}
 		var f domain.Follow
 		if err := rows.Scan(&f.FollowerSub, &f.FolloweeSub, &f.CreatedAt); err != nil {
 			return nil, "", fmt.Errorf("postgres: scan follow: %w", err)
 		}
 		follows = append(follows, &f)
-		if len(follows) > limit {
-			break
-		}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, "", fmt.Errorf("postgres: list follows iterate: %w", err)
 	}
 
-	if len(follows) <= limit {
+	if !hasMore {
 		return follows, "", nil
 	}
-	page := follows[:limit]
-	last := page[limit-1]
+	last := follows[limit-1]
 	peer := last.FollowerSub
 	if !followersSide {
 		peer = last.FolloweeSub
 	}
-	return page, sharedcursor.EncodeFollow(last.CreatedAt, peer), nil
+	return follows, sharedcursor.EncodeFollow(last.CreatedAt, peer), nil
 }
 
 // AreFollowing returns which of targetSubs the viewer follows. Subs
