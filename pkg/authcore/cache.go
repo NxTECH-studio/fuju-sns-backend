@@ -70,8 +70,8 @@ func (c *IntrospectCache) Introspect(ctx context.Context, accessToken string) (*
 			if call.err != nil {
 				return nil, call.err
 			}
-			copy := *call.session
-			return &copy, nil
+			sessionCopy := *call.session
+			return &sessionCopy, nil
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
