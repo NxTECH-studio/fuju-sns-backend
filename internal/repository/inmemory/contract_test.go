@@ -13,9 +13,12 @@ import (
 func newContract(_ *testing.T) testsupport.Contract {
 	links := inmemory.NewLinkStore()
 	return testsupport.Contract{
-		Users: inmemory.NewUserRepository(),
-		Posts: inmemory.NewPostRepository(links),
-		Likes: inmemory.NewLikeRepository(),
+		Users:   inmemory.NewUserRepository(),
+		Posts:   inmemory.NewPostRepository(links),
+		Likes:   inmemory.NewLikeRepository(),
+		Follows: inmemory.NewFollowRepository(),
+		Tags:    inmemory.NewTagRepository(links),
+		Badges:  inmemory.NewBadgeRepository(),
 	}
 }
 
@@ -29,4 +32,16 @@ func TestPostRepository_Contract(t *testing.T) {
 
 func TestLikeRepository_Contract(t *testing.T) {
 	testsupport.RunLikeRepositoryContract(t, newContract)
+}
+
+func TestFollowRepository_Contract(t *testing.T) {
+	testsupport.RunFollowRepositoryContract(t, newContract)
+}
+
+func TestTagRepository_Contract(t *testing.T) {
+	testsupport.RunTagRepositoryContract(t, newContract)
+}
+
+func TestBadgeRepository_Contract(t *testing.T) {
+	testsupport.RunBadgeRepositoryContract(t, newContract)
 }

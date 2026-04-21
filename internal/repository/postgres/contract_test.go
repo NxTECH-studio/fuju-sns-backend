@@ -62,6 +62,10 @@ func truncateAll(t *testing.T) {
 			post_images,
 			ogp_jobs,
 			posts,
+			follows,
+			user_badges,
+			badges,
+			tags,
 			users
 		CASCADE`)
 	if err != nil {
@@ -76,9 +80,12 @@ func truncateAll(t *testing.T) {
 func newContract(t *testing.T) testsupport.Contract {
 	truncateAll(t)
 	return testsupport.Contract{
-		Users: postgres.NewUserRepository(integrationPool),
-		Posts: postgres.NewPostRepository(integrationPool),
-		Likes: postgres.NewLikeRepository(integrationPool),
+		Users:   postgres.NewUserRepository(integrationPool),
+		Posts:   postgres.NewPostRepository(integrationPool),
+		Likes:   postgres.NewLikeRepository(integrationPool),
+		Follows: postgres.NewFollowRepository(integrationPool),
+		Tags:    postgres.NewTagRepository(integrationPool),
+		Badges:  postgres.NewBadgeRepository(integrationPool),
 	}
 }
 
@@ -92,6 +99,18 @@ func TestPostRepository_Contract_Postgres(t *testing.T) {
 
 func TestLikeRepository_Contract_Postgres(t *testing.T) {
 	testsupport.RunLikeRepositoryContract(t, newContract)
+}
+
+func TestFollowRepository_Contract_Postgres(t *testing.T) {
+	testsupport.RunFollowRepositoryContract(t, newContract)
+}
+
+func TestTagRepository_Contract_Postgres(t *testing.T) {
+	testsupport.RunTagRepositoryContract(t, newContract)
+}
+
+func TestBadgeRepository_Contract_Postgres(t *testing.T) {
+	testsupport.RunBadgeRepositoryContract(t, newContract)
 }
 
 // TestAttachOGP_Postgres covers PostRepository.AttachOGP in isolation
