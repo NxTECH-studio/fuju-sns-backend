@@ -1,12 +1,14 @@
 package config
 
 import (
+	"net/http"
 	"testing"
 	"time"
 )
 
 func base() *Config {
 	return &Config{
+		Environment:                 "development",
 		DBHost:                      "localhost",
 		DBName:                      "fuju",
 		DBUser:                      "u",
@@ -52,6 +54,62 @@ func TestValidate_acceptsNoneWithSecure(t *testing.T) {
 	c.SessionCookieSecure = true
 	if err := c.Validate(); err != nil {
 		t.Fatalf("SameSite=None + Secure=true must pass, got %v", err)
+	}
+}
+
+func TestValidate_rejectsSecureFalseOutsideDevelopment(t *testing.T) {
+	for _, env := range []string{"staging", "production", ""} {
+		c := base()
+		c.Environment = env
+		c.SessionCookieSecure = false
+		if err := c.Validate(); err == nil {
+			t.Errorf("Secure=false must be rejected for Environment=%q", env)
+		}
+	}
+}
+
+func TestValidate_acceptsSecureFalseInDevelopment(t *testing.T) {
+	c := base()
+	c.Environment = "development"
+	c.SessionCookieSecure = false
+	if err := c.Validate(); err != nil {
+		t.Fatalf("Secure=false + Environment=development must pass, got %v", err)
+	}
+}
+
+func TestValidate_rejectsZeroFallbackMaxAge(t *testing.T) {
+	c := base()
+	c.SessionCookieFallbackMaxAge = 0
+	if err := c.Validate(); err == nil {
+		t.Fatalf("FallbackMaxAge=0 must be rejected (would emit unbounded cookie)")
+	}
+	c.SessionCookieFallbackMaxAge = -1 * time.Second
+	if err := c.Validate(); err == nil {
+		t.Fatalf("negative FallbackMaxAge must be rejected")
+	}
+}
+
+func TestValidate_cachesParsedSameSite(t *testing.T) {
+	cases := []struct {
+		in   string
+		want http.SameSite
+	}{
+		{"Lax", http.SameSiteLaxMode},
+		{"Strict", http.SameSiteStrictMode},
+		{"None", http.SameSiteNoneMode},
+	}
+	for _, tc := range cases {
+		c := base()
+		c.SessionCookieSameSite = tc.in
+		if tc.in == "None" {
+			c.SessionCookieSecure = true
+		}
+		if err := c.Validate(); err != nil {
+			t.Fatalf("%s: unexpected error %v", tc.in, err)
+		}
+		if got := c.SessionCookieSameSiteMode(); got != tc.want {
+			t.Errorf("%s: cached mode %v, want %v", tc.in, got, tc.want)
+		}
 	}
 }
 

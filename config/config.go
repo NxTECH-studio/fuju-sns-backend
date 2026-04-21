@@ -8,6 +8,7 @@ package config
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -45,6 +46,12 @@ type Config struct {
 	SessionCookieSameSite       string        // "Lax" | "Strict" | "None"; default "Lax"
 	SessionCookieDomain         string        // optional; empty = host-only cookie
 	SessionCookieFallbackMaxAge time.Duration // default 1h; used when the access token lacks an `exp` claim
+
+	// sessionCookieSameSiteMode caches the parsed form of
+	// SessionCookieSameSite. Populated by Validate so wiring code does
+	// not have to re-run the same switch. Do not access directly; use
+	// SessionCookieSameSiteMode() which guards the init order.
+	sessionCookieSameSiteMode http.SameSite
 
 	// Logging
 	LogLevel string
@@ -114,7 +121,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("AUTHCORE_CLIENT_SECRET is required")
 	}
 	switch c.SessionCookieSameSite {
-	case "Lax", "Strict", "None":
+	case "Lax":
+		c.sessionCookieSameSiteMode = http.SameSiteLaxMode
+	case "Strict":
+		c.sessionCookieSameSiteMode = http.SameSiteStrictMode
+	case "None":
+		c.sessionCookieSameSiteMode = http.SameSiteNoneMode
 	default:
 		return fmt.Errorf("SESSION_COOKIE_SAMESITE must be Lax, Strict, or None, got %q", c.SessionCookieSameSite)
 	}
@@ -123,7 +135,29 @@ func (c *Config) Validate() error {
 	if c.SessionCookieSameSite == "None" && !c.SessionCookieSecure {
 		return fmt.Errorf("SESSION_COOKIE_SAMESITE=None requires SESSION_COOKIE_SECURE=true")
 	}
+	// Anything beyond local dev must ship a Secure cookie — a plain-HTTP
+	// staging / production deployment would leak the access token on
+	// the wire. "development" is the only environment where Secure=false
+	// is legitimate (localhost http).
+	if !c.SessionCookieSecure && c.Environment != "development" {
+		return fmt.Errorf("SESSION_COOKIE_SECURE=true is required when ENVIRONMENT != development (got %q)", c.Environment)
+	}
+	// A zero fallback would emit a session cookie (no Max-Age) whenever
+	// the access token lacks an exp claim; that is never what we want
+	// for an auth cookie. Reject up-front.
+	if c.SessionCookieFallbackMaxAge <= 0 {
+		return fmt.Errorf("SESSION_COOKIE_FALLBACK_MAX_AGE must be > 0 (got %s)", c.SessionCookieFallbackMaxAge)
+	}
 	return nil
+}
+
+// SessionCookieSameSiteMode returns the http.SameSite value matching
+// SessionCookieSameSite. Validate populates this; callers that bypass
+// Validate get http.SameSiteDefaultMode (the zero value), which is
+// never a configuration we want to emit — but since every real code
+// path runs Validate via Load, the guard is belt-and-suspenders.
+func (c *Config) SessionCookieSameSiteMode() http.SameSite {
+	return c.sessionCookieSameSiteMode
 }
 
 // Helper functions

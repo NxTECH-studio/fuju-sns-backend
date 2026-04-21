@@ -6,7 +6,13 @@ import (
 
 	"github.com/fuju/backend/pkg/auth"
 	"github.com/fuju/backend/pkg/cookie"
+	"github.com/fuju/backend/pkg/errors"
 )
+
+// minCookieMaxAge floors the Max-Age we hand to cookie.Build. Sub-second
+// remaining lifetimes would round to 0 and produce an unbounded session
+// cookie per net/http semantics; one second is always safer than zero.
+const minCookieMaxAge = time.Second
 
 // SessionCookieConfig describes the Set-Cookie attributes used by the
 // handoff endpoints. Values come from config.Config at wiring time;
@@ -43,14 +49,15 @@ func (h *SessionHandler) Issue(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		// The only way to hit this branch is a misconfigured middleware
 		// chain that stripped the token before reaching the handler.
-		// Surface as a 500 so operators notice the wiring bug.
-		http.Error(w, "internal: access token missing from context", http.StatusInternalServerError)
+		// Surface as a 500 so operators notice the wiring bug — and
+		// stay on the JSON error shape the rest of the API uses.
+		WriteErrorResponse(w, errors.InternalServer("access token missing from context", nil))
 		return
 	}
 
 	maxAge := h.cfg.FallbackMaxAge
 	if exp, ok := auth.GetExpiresAtFromContext(r.Context()); ok {
-		if remaining := time.Until(exp); remaining > 0 {
+		if remaining := time.Until(exp); remaining >= minCookieMaxAge {
 			maxAge = remaining
 		}
 	}

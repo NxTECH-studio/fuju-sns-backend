@@ -24,7 +24,6 @@ import (
 	timelineusecase "github.com/fuju/backend/internal/usecase/timeline"
 	userusecase "github.com/fuju/backend/internal/usecase/user"
 	"github.com/fuju/backend/pkg/authcore"
-	"github.com/fuju/backend/pkg/cookie"
 	"github.com/fuju/backend/pkg/logger"
 	"github.com/fuju/backend/pkg/ogp"
 	"github.com/fuju/backend/pkg/storage"
@@ -145,17 +144,12 @@ func main() {
 	}
 
 	// Session cookie policy for the Bearer→Cookie handoff endpoints.
-	// SameSite is validated at config.Load() so the parse cannot fail
-	// here; we guard it anyway to avoid a silent fall-through.
-	sessionSameSite, err := cookie.ParseSameSite(cfg.SessionCookieSameSite)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Invalid SESSION_COOKIE_SAMESITE: %v\n", err)
-		os.Exit(1)
-	}
+	// SameSite is parsed once by config.Load (Validate caches the
+	// http.SameSite value), so wiring here is a plain struct copy.
 	sessionCookieCfg := handler.SessionCookieConfig{
 		Name:           cfg.SessionCookieName,
 		Secure:         cfg.SessionCookieSecure,
-		SameSite:       sessionSameSite,
+		SameSite:       cfg.SessionCookieSameSiteMode(),
 		Domain:         cfg.SessionCookieDomain,
 		Path:           "/",
 		FallbackMaxAge: cfg.SessionCookieFallbackMaxAge,

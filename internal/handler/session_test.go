@@ -81,6 +81,24 @@ func TestSessionHandler_Issue_usesFallbackWhenExpAbsent(t *testing.T) {
 	}
 }
 
+func TestSessionHandler_Issue_fallsBackOnSubSecondRemaining(t *testing.T) {
+	// A remaining lifetime under one second rounds to MaxAge=0, which
+	// net/http treats as "session cookie" — the exact opposite of
+	// what we want for an expiring auth cookie. The handler must fall
+	// back to the configured default instead.
+	cfg := defaultCookieCfg()
+	cfg.FallbackMaxAge = 5 * time.Minute
+	h := NewSessionHandler(cfg)
+
+	rec := httptest.NewRecorder()
+	h.Issue(rec, newIssueRequest("at-abc", time.Now().Add(500*time.Millisecond)))
+
+	got := rec.Result().Cookies()[0].MaxAge
+	if got != 300 {
+		t.Errorf("MaxAge = %d, want 300 (fallback kicked in at sub-second exp)", got)
+	}
+}
+
 func TestSessionHandler_Issue_usesFallbackWhenExpAlreadyPassed(t *testing.T) {
 	// AuthCore returned a token whose `exp` is in the past (clock skew
 	// or stale cache). The handler falls back to the configured default
