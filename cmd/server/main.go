@@ -19,11 +19,13 @@ import (
 	badgeusecase "github.com/fuju/backend/internal/usecase/badge"
 	followusecase "github.com/fuju/backend/internal/usecase/follow"
 	imageusecase "github.com/fuju/backend/internal/usecase/image"
+	ogpusecase "github.com/fuju/backend/internal/usecase/ogp"
 	postusecase "github.com/fuju/backend/internal/usecase/post"
 	timelineusecase "github.com/fuju/backend/internal/usecase/timeline"
 	userusecase "github.com/fuju/backend/internal/usecase/user"
 	"github.com/fuju/backend/pkg/authcore"
 	"github.com/fuju/backend/pkg/logger"
+	"github.com/fuju/backend/pkg/ogp"
 	"github.com/fuju/backend/pkg/storage"
 )
 
@@ -59,6 +61,8 @@ func main() {
 	likeRepo := inmemory.NewLikeRepository()
 	badgeRepo := inmemory.NewBadgeRepository()
 	followRepo := inmemory.NewFollowRepository()
+	ogpCacheRepo := inmemory.NewOGPCacheRepository(links)
+	ogpJobQueue := inmemory.NewOGPJobQueue()
 
 	// AuthCore client + short-lived introspection cache.
 	authcoreClient := authcore.New(authcore.Options{
@@ -81,10 +85,14 @@ func main() {
 	// ships empty for now; load from config when a dictionary source lands.
 	tagEx := tagextractor.NewRegexTagExtractor(nil)
 
-	postHydrator := postusecase.NewHydrator(imageRepo, tagRepo, likeRepo, userRepo, followRepo)
+	postHydrator := postusecase.NewHydrator(imageRepo, tagRepo, likeRepo, userRepo, followRepo, ogpCacheRepo)
+
+	ogpEnqueuer := ogpusecase.NewEnqueuer(ogpCacheRepo, ogpJobQueue, postRepo, log)
 
 	postGetUC := postusecase.NewGetPostUseCase(postRepo, postHydrator)
-	postCreateUC := postusecase.NewCreatePostUseCase(postRepo, imageRepo, tagRepo, tagEx)
+	postCreateUC := postusecase.
+		NewCreatePostUseCase(postRepo, imageRepo, tagRepo, tagEx).
+		WithPostCommitHook(ogpEnqueuer.EnqueueForPost)
 	postDeleteUC := postusecase.NewDeletePostUseCase(postRepo)
 	postListUC := postusecase.NewListPostsUseCase(postRepo, postHydrator)
 	postRepliesUC := postusecase.NewListRepliesUseCase(postRepo, postHydrator)
@@ -222,6 +230,16 @@ func main() {
 		}
 	}()
 
+	// OGP background worker. Tied to the background context that is
+	// cancelled at shutdown so the goroutine exits cleanly.
+	ogpFetcher := ogp.NewFetcher(&ogp.Options{UserAgent: cfg.OGPUserAgent})
+	ogpWorker := ogpusecase.NewWorker(ogpJobQueue, ogpCacheRepo, postRepo, ogpFetcher, log)
+	go func() {
+		log.Info(ctx, "OGP worker started")
+		ogpWorker.Run(ctx)
+		log.Info(ctx, "OGP worker stopped")
+	}()
+
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
@@ -235,6 +253,9 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Error(shutdownCtx, "Server shutdown error", err)
 	}
+
+	// Cancel the background context so the OGP worker exits.
+	cancelBackground()
 
 	log.Info(ctx, "Server stopped")
 }

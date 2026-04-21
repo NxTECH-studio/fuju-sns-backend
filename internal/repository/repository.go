@@ -103,6 +103,54 @@ type PostRepository interface {
 	DecrementRepliesCount(ctx context.Context, postID string) error
 	IncrementLikesCount(ctx context.Context, postID string) error
 	DecrementLikesCount(ctx context.Context, postID string) error
+
+	// AttachOGP links an OGP cache row to a post at the given position.
+	// Idempotent: repeat calls for the same (postID, urlHash) return nil
+	// without duplicating the row. Position conflicts (different urlHash
+	// at the same position) are silently resolved by the first writer
+	// winning — matches the SQL UNIQUE(post_id, position) semantics.
+	AttachOGP(ctx context.Context, postID, urlHash string, position int) error
+}
+
+// OGPCacheRepository defines persistence for cached OGP previews. The
+// cache is keyed by SHA256 of the normalized URL (see pkg/ogp.Hash).
+type OGPCacheRepository interface {
+	// Get returns (nil, nil) on cache miss. Expired rows are returned
+	// as-is; callers compare ExpiresAt against now themselves so they
+	// can use a stale row as a grace fallback if refresh fails.
+	Get(ctx context.Context, urlHash string) (*domain.OGPPreview, error)
+
+	// Upsert inserts or replaces the row. The row's URLHash is the
+	// primary key.
+	Upsert(ctx context.Context, preview *domain.OGPPreview) error
+
+	// ListByPostIDs resolves every post_ogp → ogp_cache chain for the
+	// given posts and returns them grouped by post ID, ordered by
+	// position ascending. Posts with no attached OGP are absent from
+	// the returned map.
+	ListByPostIDs(ctx context.Context, postIDs []string) (map[string][]*domain.OGPPreview, error)
+}
+
+// OGPJobQueue is the interface backed in production by ogp_jobs via
+// SELECT ... FOR UPDATE SKIP LOCKED. Enqueue/Claim/MarkDone/MarkFailed
+// are the lifecycle transitions the worker drives.
+type OGPJobQueue interface {
+	// Enqueue adds a new queued job. The caller supplies a ULID id; the
+	// worker uses it for telemetry / idempotency.
+	Enqueue(ctx context.Context, id, urlHash, url, postID string) error
+
+	// Claim atomically moves the oldest queued job to running and
+	// returns it. Returns (nil, nil) when the queue is empty — the
+	// worker interprets that as "sleep briefly and try again".
+	Claim(ctx context.Context, workerID string) (*domain.OGPJob, error)
+
+	// MarkDone flips the claimed job to done.
+	MarkDone(ctx context.Context, jobID string) error
+
+	// MarkFailed records a failure. If retriable is true the job is
+	// returned to queued for another attempt; otherwise it's finalized
+	// as failed so it won't be reclaimed.
+	MarkFailed(ctx context.Context, jobID, reason string, retriable bool) error
 }
 
 // LikeRepository defines like persistence operations. Create and Delete

@@ -17,6 +17,12 @@ const DefaultPageLimit = 20
 // MaxPageLimit caps the per-request list size.
 const MaxPageLimit = 50
 
+// PostCommitHook is a best-effort callback invoked after a post is
+// persisted. Implementations must not panic or block long — the create
+// API returns to the client immediately after the hook runs. Current
+// user: the OGP enqueuer (internal/usecase/ogp).
+type PostCommitHook func(ctx context.Context, post *domain.Post)
+
 // CreatePostUseCase creates a post with optional images and a parent
 // reply reference. Tag extraction is delegated to a TagExtractor.
 type CreatePostUseCase struct {
@@ -24,6 +30,7 @@ type CreatePostUseCase struct {
 	imageRepo    repository.ImageRepository
 	tagRepo      repository.TagRepository
 	tagExtractor domain.TagExtractor
+	onCommit     PostCommitHook
 }
 
 // NewCreatePostUseCase constructs a CreatePostUseCase.
@@ -39,6 +46,13 @@ func NewCreatePostUseCase(
 		tagRepo:      tagRepo,
 		tagExtractor: tagExtractor,
 	}
+}
+
+// WithPostCommitHook installs a best-effort post-commit callback.
+// Returns the receiver so it chains onto NewCreatePostUseCase.
+func (uc *CreatePostUseCase) WithPostCommitHook(hook PostCommitHook) *CreatePostUseCase {
+	uc.onCommit = hook
+	return uc
 }
 
 // Execute validates, resolves the thread root, verifies image ownership,
@@ -125,6 +139,13 @@ func (uc *CreatePostUseCase) Execute(ctx context.Context, userSub string, req *d
 	images, err := uc.imageRepo.ListByPostID(ctx, created.ID)
 	if err != nil {
 		return nil, errors.DatabaseError("failed to load post images", err)
+	}
+
+	// Post-commit hook. Runs synchronously but the implementation is
+	// contractually best-effort — any persistence it performs must not
+	// affect the user-visible success of this create.
+	if uc.onCommit != nil {
+		uc.onCommit(ctx, created)
 	}
 
 	return &PostDetail{Post: created, Images: images, Tags: tags}, nil
