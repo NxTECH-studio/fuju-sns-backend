@@ -159,8 +159,7 @@ healthcheck: pg_isready (10秒間隔)
 
 **主要テーブル**:
 - `users` - AuthCore 鏡像 + SNS 固有プロフィール（Bio/Banner、`is_admin`）
-- `posts` - 投稿
-- `comments` - 暫定（post 機能タスクで post reply に統合され削除予定）
+- `posts` - 投稿（`reply_to_post_id` により reply を表現）
 - `images` - 画像メタデータ
 
 #### 3. Redis Service (`fuju-redis`)
@@ -578,14 +577,15 @@ id: 投稿 ID (ULID)
 
 ---
 
-### 5. コメントエンドポイント（暫定）
+### 5. リプライ関連エンドポイント
 
-> コメントは Post 機能タスク（`02-implement-post-feature.md`）で
-> Post の reply に統合される予定。新規実装は reply 側に寄せる想定で、
-> ここは既存 API の暫定仕様として残す。
+現行 API では reply は投稿そのものとして表現される：
 
-`POST /posts/{id}/comments` / `DELETE /posts/{post_id}/comments/{comment_id}`
-の ID はすべて ULID 文字列。認証は AuthCore セッション Cookie 必須。
+- `POST /posts` に `reply_to_post_id` を指定して返信を作成
+- `DELETE /posts/{id}` で返信を削除（所有者のみ）
+- `GET /posts/{id}/replies` で直接の返信一覧を取得
+
+ID はすべて ULID 文字列。
 
 ---
 
@@ -866,7 +866,6 @@ type Post struct {
   Content       string         // 投稿内容（1-5000 文字）
   ImageURLs     []string       // 画像 URL リスト（最大 10 枚）
   LikesCount    int64          // いいね数
-  CommentsCount int64          // コメント数（暫定、reply 統合で削除予定）
   CreatedAt     time.Time
   UpdatedAt     time.Time
   DeletedAt     *time.Time
@@ -891,15 +890,6 @@ CREATE TABLE posts (
   deleted_at  TIMESTAMPTZ NULL
 );
 ```
-
----
-
-### Comment ドメインモデル
-
-> コメントは Post 機能タスク（`02-implement-post-feature.md`）で
-> Post の reply に統合され、ドメインモデルごと削除される。
-> 現行の `internal/domain/comment.go` は ID/UserID/PostID を ULID 化した
-> 暫定シェイプとして残しているのみ。新規実装の依存先にしないこと。
 
 ---
 

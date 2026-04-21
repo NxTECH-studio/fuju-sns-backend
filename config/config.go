@@ -1,4 +1,9 @@
 // Package config provides configuration loading and management.
+//
+// Note: DB_* fields are kept as configuration shape but the Go process
+// currently runs on an in-memory repository (DB wiring is not implemented).
+// They are retained so that db/init.sh, the Makefile db-* targets, and the
+// docker-compose postgres service remain usable for migration / local tooling.
 package config
 
 import (
@@ -20,11 +25,6 @@ type Config struct {
 	DBName     string
 	DBUser     string
 	DBPassword string
-	DBMaxConn  int
-	DBMinConn  int
-
-	// Redis
-	RedisURL string
 
 	// AuthCore
 	AuthCoreBaseURL            string
@@ -41,9 +41,6 @@ type Config struct {
 	// CORS
 	CORSAllowedOrigins string
 
-	// Frontend
-	FrontendURL string
-
 	// OGP fetcher
 	OGPUserAgent string
 }
@@ -58,9 +55,6 @@ func Load() (*Config, error) {
 		DBName:                     getEnv("DB_NAME", ""),
 		DBUser:                     getEnv("DB_USER", ""),
 		DBPassword:                 getEnv("DB_PASSWORD", ""),
-		DBMaxConn:                  getEnvInt("DB_MAX_CONN", 25),
-		DBMinConn:                  getEnvInt("DB_MIN_CONN", 5),
-		RedisURL:                   getEnv("REDIS_URL", ""),
 		AuthCoreBaseURL:            getEnv("AUTHCORE_BASE_URL", ""),
 		AuthCoreClientID:           getEnv("AUTHCORE_CLIENT_ID", ""),
 		AuthCoreClientSecret:       getEnv("AUTHCORE_CLIENT_SECRET", ""),
@@ -70,7 +64,6 @@ func Load() (*Config, error) {
 		AuthCoreIntrospectCacheTTL: getEnvDuration("AUTHCORE_INTROSPECT_CACHE_TTL", 30*time.Second),
 		LogLevel:                   getEnv("LOG_LEVEL", "info"),
 		CORSAllowedOrigins:         getEnv("CORS_ALLOWED_ORIGINS", "*"),
-		FrontendURL:                getEnv("FRONTEND_URL", ""),
 		OGPUserAgent:               getEnv("OGP_USER_AGENT", "FujuBot/1.0 (+https://fuju.example.com/bot)"),
 	}
 
@@ -94,9 +87,6 @@ func (c *Config) Validate() error {
 	}
 	if c.DBPassword == "" {
 		return fmt.Errorf("DB_PASSWORD is required")
-	}
-	if c.RedisURL == "" {
-		return fmt.Errorf("REDIS_URL is required")
 	}
 	if c.AuthCoreBaseURL == "" {
 		return fmt.Errorf("AUTHCORE_BASE_URL is required")

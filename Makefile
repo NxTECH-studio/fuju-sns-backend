@@ -29,7 +29,7 @@ help:
 	@echo "  make fmt           - Format code (go fmt)"
 	@echo ""
 	@echo "Database:"
-	@echo "  make db-up         - Start PostgreSQL and Redis with Docker Compose"
+	@echo "  make db-up         - Start PostgreSQL with Docker Compose"
 	@echo "  make db-down       - Stop and remove database containers"
 	@echo "  make db-init       - Initialize database with migrations"
 	@echo "  make db-reset      - Reset database (WARNING: Deletes all data)"
@@ -112,7 +112,6 @@ db-up:
 	docker-compose up -d
 	@echo "Database services started!"
 	@echo "PostgreSQL: localhost:5432"
-	@echo "Redis: localhost:6379"
 	@echo "Adminer: http://localhost:8081"
 
 db-down:

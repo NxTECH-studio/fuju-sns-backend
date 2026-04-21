@@ -4,7 +4,6 @@
 
 - Docker and Docker Compose installed
 - PostgreSQL 16+ (if not using Docker)
-- Redis 7+ (if not using Docker)
 
 ## Quick Start with Docker Compose
 
@@ -17,13 +16,12 @@ cp .env.example .env
 # Edit .env with your preferred settings
 nano .env
 
-# Start PostgreSQL and Redis
+# Start PostgreSQL
 docker-compose up -d
 ```
 
 The containers will start with:
 - PostgreSQL on `localhost:5432`
-- Redis on `localhost:6379`
 - Adminer (database UI) on `http://localhost:8081`
 
 ### 2. Run Database Migrations
@@ -75,16 +73,6 @@ GRANT ALL PRIVILEGES ON DATABASE fuju TO fuju_user;
 PGPASSWORD="fuju_password" psql -h localhost -U fuju_user -d fuju < db/migrations/001_initial_schema.sql
 ```
 
-### 3. Start Redis
-
-```bash
-# Using Homebrew (macOS)
-brew services start redis
-
-# Or using Docker
-docker run -d -p 6379:6379 redis:7-alpine
-```
-
 ## Environment Variables
 
 Required environment variables for database connection:
@@ -95,48 +83,30 @@ DB_PORT=5432
 DB_NAME=fuju
 DB_USER=fuju_user
 DB_PASSWORD=fuju_password
-REDIS_URL=redis://localhost:6379
 ```
 
 ## Database Schema
 
 ### Users Table
-- Stores user information
-- Uses OAuth provider and ID for authentication
+- Mirror of AuthCore identity keyed by `sub` (ULID) plus SNS-owned
+  fields (`bio`, `banner_url`, `is_admin`)
+- `*_cached` columns refreshed with a 1h TTL via `profile_refreshed_at`
 - Soft deletes with `deleted_at` timestamp
 
 ### Posts Table
-- Stores post content
-- References user via `user_id`
-- Tracks `likes_count` and `comments_count`
-- Stores image URLs as JSONB array
+- Stores post content with ULID primary key
+- References author via `user_id` (`users.sub`)
+- Replies are modelled as posts pointing back via `reply_to_post_id`
+  (there is no separate `comments` table)
+- Tracks `likes_count`; like relationships live in the dedicated
+  `likes` table
 
-### Comments Table
-- Stores comments on posts
-- References both post and user
-- Cascading delete with posts
-
-### Sessions Table
-- Stores web client sessions
-- Linked to users
-- Automatic expiration
-
-### OAuth States Table
-- Temporary storage for CSRF protection during OAuth flow
-- Automatic cleanup on expiration
-
-### Likes Table (Future)
-- Tracks like relationships between users and posts
-- Ensures one like per user per post
-
-## Database Indexes
+### Database Indexes
 
 Created for performance optimization:
-- User lookups: `oauth_provider`, `deleted_at`
-- Post queries: `user_id`, `created_at`, `deleted_at`
-- Comment queries: `post_id`, `user_id`, `deleted_at`
-- Session management: `user_id`, `expires_at`
-- OAuth state cleanup: `provider`, `expires_at`
+- User lookups: `profile_refreshed_at`, `display_id_cached`, `deleted_at`
+- Post queries: `user_id`, `created_at`, `reply_to_post_id`, `deleted_at`
+- Likes: `(user_id, post_id)` unique, `post_id`
 
 ## Backup and Restore
 
@@ -155,8 +125,8 @@ PGPASSWORD="fuju_password" psql -h localhost -U fuju_user -d fuju < backup.sql
 ## Troubleshooting
 
 ### Connection Refused
-- Ensure PostgreSQL and Redis are running
-- Check that ports 5432 and 6379 are available
+- Ensure PostgreSQL is running
+- Check that port 5432 is available
 - Verify firewall settings
 
 ### Authentication Failed

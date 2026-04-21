@@ -35,135 +35,6 @@ paths:
                     type: string
                     format: date-time
 
-  /auth/oauth/authorize:
-    post:
-      summary: Initiate OAuth2 authorization
-      tags:
-        - Authentication
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                provider:
-                  type: string
-                  enum: [google, github]
-                  example: google
-                redirect_uri:
-                  type: string
-                  example: https://app.fuju.local/auth/callback
-      responses:
-        "200":
-          description: Authorization URL generated
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  redirect_url:
-                    type: string
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "500":
-          $ref: "#/components/responses/ServerError"
-
-  /auth/oauth/callback:
-    post:
-      summary: Handle OAuth2 callback
-      tags:
-        - Authentication
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [code, state]
-              properties:
-                code:
-                  type: string
-                  description: Authorization code from OAuth2 provider
-                state:
-                  type: string
-                  description: State token for CSRF protection
-                device_type:
-                  type: string
-                  enum: [web, mobile]
-                  default: web
-      responses:
-        "200":
-          description: Authentication successful
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/AuthResponse"
-          headers:
-            Set-Cookie:
-              schema:
-                type: string
-                example: session_id=abcdef123456; HttpOnly; Secure; Path=/; SameSite=Strict
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "500":
-          $ref: "#/components/responses/ServerError"
-
-  /auth/refresh:
-    post:
-      summary: Refresh access token (Mobile)
-      tags:
-        - Authentication
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [refresh_token]
-              properties:
-                refresh_token:
-                  type: string
-      responses:
-        "200":
-          description: Token refreshed
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  access_token:
-                    type: string
-                  expires_in:
-                    type: integer
-                    example: 1800
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
-  /auth/logout:
-    post:
-      summary: Logout and invalidate session/token
-      tags:
-        - Authentication
-      security:
-        - BearerAuth: []
-        - CookieAuth: []
-      responses:
-        "200":
-          description: Logout successful
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  status:
-                    type: string
-                    example: success
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-
   /users:
     get:
       summary: List users
@@ -208,7 +79,6 @@ paths:
         - Users
       security:
         - BearerAuth: []
-        - CookieAuth: []
       requestBody:
         required: true
         content:
@@ -276,7 +146,6 @@ paths:
         - Users
       security:
         - BearerAuth: []
-        - CookieAuth: []
       parameters:
         - in: path
           name: id
@@ -362,7 +231,6 @@ paths:
         - Posts
       security:
         - BearerAuth: []
-        - CookieAuth: []
       requestBody:
         required: true
         content:
@@ -421,7 +289,6 @@ paths:
         - Posts
       security:
         - BearerAuth: []
-        - CookieAuth: []
       parameters:
         - in: path
           name: id
@@ -446,7 +313,6 @@ paths:
         - Comments
       security:
         - BearerAuth: []
-        - CookieAuth: []
       parameters:
         - in: path
           name: id
@@ -487,7 +353,6 @@ paths:
         - Comments
       security:
         - BearerAuth: []
-        - CookieAuth: []
       parameters:
         - in: path
           name: post_id
@@ -662,17 +527,9 @@ components:
       bearerFormat: JWT
       description: JWT token for mobile clients
 
-    CookieAuth:
-      type: apiKey
-      in: cookie
-      name: session_id
-      description: Session cookie for web clients
-
 tags:
   - name: Health
     description: Health check endpoint
-  - name: Authentication
-    description: Authentication and authorization
   - name: Users
     description: User management
   - name: Posts

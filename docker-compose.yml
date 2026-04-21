@@ -17,9 +17,6 @@ services:
       DB_NAME: ${DB_NAME:-fuju}
       DB_USER: ${DB_USER:-fuju_user}
       DB_PASSWORD: ${DB_PASSWORD:-fuju_password}
-      DB_MAX_CONN: ${DB_MAX_CONN:-25}
-      DB_MIN_CONN: ${DB_MIN_CONN:-5}
-      REDIS_URL: redis://redis:6379
       AUTHCORE_BASE_URL: ${AUTHCORE_BASE_URL}
       AUTHCORE_CLIENT_ID: ${AUTHCORE_CLIENT_ID}
       AUTHCORE_CLIENT_SECRET: ${AUTHCORE_CLIENT_SECRET}
@@ -34,11 +31,8 @@ services:
       R2_PUBLIC_DOMAIN: ${R2_PUBLIC_DOMAIN}
       R2_MAX_FILE_SIZE: ${R2_MAX_FILE_SIZE:-5242880}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
-      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     networks:
       - fuju-network
@@ -64,22 +58,6 @@ services:
     networks:
       - fuju-network
 
-  redis:
-    image: redis:7-alpine
-    container_name: fuju-redis
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    command: redis-server --appendonly yes
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    networks:
-      - fuju-network
-
   adminer:
     image: adminer:latest
     container_name: fuju-adminer
@@ -95,8 +73,6 @@ services:
 
 volumes:
   postgres_data:
-    driver: local
-  redis_data:
     driver: local
 
 networks:

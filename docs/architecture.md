@@ -120,7 +120,6 @@ backend/
 │   │   ├── errors.go                  # Custom error types
 │   │   └── http_errors.go             # HTTP error mapping
 │   ├── cache/
-│   │   ├── redis.go                   # Redis client wrapper
 │   │   └── cache_key.go               # Cache key management
 │   └── authcore/
 │       ├── client.go                  # AuthCore HTTP client (Introspect / GetProfile)
@@ -200,7 +199,7 @@ user, ok  := auth.GetCurrentUserFromContext(r.Context())
 ### Technology Stack
 
 - **Primary DB**: PostgreSQL 13+
-- **Caching**: Redis (frequently accessed data; session state lives in AuthCore)
+- **Caching**: 現状なし。AuthCore introspection は in-memory キャッシュ（`pkg/authcore/cache.go`、TTL=30s）。
 - **Connection Pool**: `database/sql` with optimized pool settings
 
 ### Identifiers
@@ -466,9 +465,8 @@ Closes #123
 
 Managed via `.env` and environment variables (production uses secrets):
 - `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
-- `REDIS_URL`
-- `AUTHCORE_BASE_URL`, `AUTHCORE_SERVICE_TOKEN`
-- `AUTHCORE_SESSION_COOKIE_NAME`, `AUTHCORE_INTROSPECT_PATH`
+- `AUTHCORE_BASE_URL`, `AUTHCORE_CLIENT_ID`, `AUTHCORE_CLIENT_SECRET`
+- `AUTHCORE_INTROSPECT_PATH`, `AUTHCORE_PROFILE_PATH`
 - `AUTHCORE_PROFILE_TTL`, `AUTHCORE_INTROSPECT_CACHE_TTL`
 - `ENVIRONMENT` (development, staging, production)
 
