@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -11,21 +10,18 @@ import (
 
 // WithTx wraps fn inside a pgx transaction. It commits on nil error,
 // rolls back otherwise. On commit failure the function returns the
-// commit error; on any other error it returns the underlying error from
-// fn (rollback errors are ignored because the transaction aborts either
-// way and surfacing them hides the real cause).
+// commit error; on any other error it returns the underlying error
+// from fn. Rollback errors are intentionally dropped: after a
+// successful Commit the rollback returns pgx.ErrTxClosed (expected
+// sentinel), and on genuine abort the caller's error already describes
+// the failure — logging another layer on top would just duplicate
+// noise and entangle pkg/db with the application logger.
 func WithTx(ctx context.Context, pool *pgxpool.Pool, fn func(pgx.Tx) error) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("db: begin tx: %w", err)
 	}
-	defer func() {
-		// Rollback is a no-op after a successful Commit and returns
-		// pgx.ErrTxClosed. Drop that sentinel silently.
-		if rbErr := tx.Rollback(ctx); rbErr != nil && !errors.Is(rbErr, pgx.ErrTxClosed) {
-			_ = rbErr
-		}
-	}()
+	defer func() { _ = tx.Rollback(ctx) }()
 
 	if err := fn(tx); err != nil {
 		return err

@@ -6,10 +6,7 @@
 package postgres
 
 import (
-	"errors"
-
 	"github.com/fuju/backend/internal/repository"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -49,16 +46,4 @@ func New(pool *pgxpool.Pool) *Store {
 // checks and integration tests that need raw TRUNCATE access.
 func (s *Store) Pool() *pgxpool.Pool {
 	return s.pool
-}
-
-// uniqueViolation reports whether err is a postgres UNIQUE constraint
-// violation (SQLSTATE 23505). Repositories that treat uniqueness
-// conflicts as idempotent no-ops (e.g. LikeRepository.Create, AttachOGP)
-// call this to distinguish "already there" from a real error.
-func uniqueViolation(err error) bool {
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) {
-		return pgErr.Code == "23505"
-	}
-	return false
 }

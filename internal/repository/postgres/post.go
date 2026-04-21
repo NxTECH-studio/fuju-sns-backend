@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/fuju/backend/internal/domain"
 	pkgdb "github.com/fuju/backend/pkg/db"
@@ -152,8 +153,7 @@ func (r *PostRepository) List(ctx context.Context, userID *string, cursor *strin
 		where = append(where, fmt.Sprintf("id < $%d", len(args)))
 	}
 
-	q := buildSelect(postSelectColumns, "posts", where, "id DESC", "$1")
-	rows, err := r.pool.Query(ctx, q, args...)
+	rows, err := r.pool.Query(ctx, buildPostListQuery(where), args...)
 	if err != nil {
 		return nil, "", fmt.Errorf("postgres: list posts: %w", err)
 	}
@@ -174,8 +174,7 @@ func (r *PostRepository) ListByUserIDs(ctx context.Context, userIDs []string, cu
 		where = append(where, fmt.Sprintf("id < $%d", len(args)))
 	}
 
-	q := buildSelect(postSelectColumns, "posts", where, "id DESC", "$1")
-	rows, err := r.pool.Query(ctx, q, args...)
+	rows, err := r.pool.Query(ctx, buildPostListQuery(where), args...)
 	if err != nil {
 		return nil, "", fmt.Errorf("postgres: list posts by user ids: %w", err)
 	}
@@ -195,8 +194,7 @@ func (r *PostRepository) ListReplies(ctx context.Context, postID string, cursor 
 		where = append(where, fmt.Sprintf("id < $%d", len(args)))
 	}
 
-	q := buildSelect(postSelectColumns, "posts", where, "id DESC", "$1")
-	rows, err := r.pool.Query(ctx, q, args...)
+	rows, err := r.pool.Query(ctx, buildPostListQuery(where), args...)
 	if err != nil {
 		return nil, "", fmt.Errorf("postgres: list replies: %w", err)
 	}
@@ -263,35 +261,20 @@ func (r *PostRepository) AttachOGP(ctx context.Context, postID, urlHash string, 
 	return nil
 }
 
-// buildSelect assembles a SELECT statement. limitParam is the $N
-// placeholder referencing the row limit (always the first bound
-// argument in this package so the helper stays simple).
-func buildSelect(columns, table string, where []string, orderBy, limitParam string) string {
-	whereClause := ""
-	if len(where) > 0 {
-		whereClause = " WHERE " + joinAnd(where)
-	}
-	return "SELECT " + columns +
-		" FROM " + table +
-		whereClause +
-		" ORDER BY " + orderBy +
-		" LIMIT " + limitParam
+// buildPostListQuery assembles the cursor-aware SELECT used by every
+// list endpoint. All three callers share the same columns, table,
+// order, and limit-placeholder convention ($1 always binds limit+1);
+// only the WHERE clause varies.
+func buildPostListQuery(where []string) string {
+	return "SELECT " + postSelectColumns +
+		" FROM posts WHERE " + strings.Join(where, " AND ") +
+		" ORDER BY id DESC LIMIT $1"
 }
 
-func joinAnd(parts []string) string {
-	out := ""
-	for i, p := range parts {
-		if i > 0 {
-			out += " AND "
-		}
-		out += p
-	}
-	return out
-}
-
-// scanPostPage consumes at most limit+1 rows, returns (page, nextCursor).
-// The limit+1th row (if present) is discarded but signals has-more via
-// the cursor being set.
+// scanPostPage consumes at most limit+1 rows and returns (page,
+// nextCursor). When a limit+1th row is present, the caller's
+// deferred rows.Close() releases it; we stop appending to avoid
+// returning it.
 func scanPostPage(rows pgx.Rows, limit int) ([]*domain.Post, string, error) {
 	posts := make([]*domain.Post, 0, limit)
 	for rows.Next() {

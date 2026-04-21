@@ -14,10 +14,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// integrationDSN is the connection string every integration test uses.
-// TestMain populates it; tests read it without further ceremony. The
-// env var is authoritative so CI / local runs can retarget without
-// code changes.
+// integrationPool is the shared pgxpool used by every integration
+// test in this package. TestMain populates it from DATABASE_URL;
+// subtests share it, and newContract TRUNCATEs between each — so
+// subtests MUST NOT call t.Parallel() lest one test's fixtures be
+// wiped mid-flight by another's truncate.
 var integrationPool *pgxpool.Pool
 
 func TestMain(m *testing.M) {
@@ -68,6 +69,10 @@ func truncateAll(t *testing.T) {
 	}
 }
 
+// newContract returns a truncated postgres-backed Contract. Because
+// it mutates the shared integrationPool via TRUNCATE, callers (and
+// every contract subtest) MUST remain serial. Do not introduce
+// t.Parallel() into this package.
 func newContract(t *testing.T) testsupport.Contract {
 	truncateAll(t)
 	return testsupport.Contract{

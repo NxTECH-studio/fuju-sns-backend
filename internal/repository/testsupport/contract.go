@@ -188,6 +188,58 @@ func RunUserRepositoryContract(t *testing.T, newContract Factory) {
 		}
 	})
 
+	t.Run("UpdateProfile_nil_field_preserves_existing", func(t *testing.T) {
+		c := newContract(t)
+		seed := &domain.User{
+			Sub:                userA,
+			DisplayNameCached:  "alice",
+			DisplayIDCached:    "alice",
+			ProfileRefreshedAt: time.Now().UTC(),
+			Bio:                "keep me",
+			BannerURL:          "https://keep/me.png",
+		}
+		if _, err := c.Users.Upsert(context.Background(), seed); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		newBio := "updated"
+		// Only Bio is supplied; BannerURL is nil and must be preserved.
+		out, err := c.Users.UpdateProfile(context.Background(), userA, &domain.UpdateUserProfileRequest{Bio: &newBio})
+		if err != nil {
+			t.Fatalf("UpdateProfile: %v", err)
+		}
+		if out == nil {
+			t.Fatalf("expected row, got nil")
+		}
+		if out.Bio != "updated" {
+			t.Errorf("bio not updated: %q", out.Bio)
+		}
+		if out.BannerURL != "https://keep/me.png" {
+			t.Errorf("banner not preserved: %q", out.BannerURL)
+		}
+	})
+
+	t.Run("UpdateProfile_explicit_empty_string_clears", func(t *testing.T) {
+		c := newContract(t)
+		seed := &domain.User{
+			Sub:                userA,
+			DisplayNameCached:  "alice",
+			DisplayIDCached:    "alice",
+			ProfileRefreshedAt: time.Now().UTC(),
+			Bio:                "old bio",
+		}
+		if _, err := c.Users.Upsert(context.Background(), seed); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		empty := ""
+		out, err := c.Users.UpdateProfile(context.Background(), userA, &domain.UpdateUserProfileRequest{Bio: &empty})
+		if err != nil {
+			t.Fatalf("UpdateProfile: %v", err)
+		}
+		if out == nil || out.Bio != "" {
+			t.Fatalf("expected bio cleared, got %+v", out)
+		}
+	})
+
 	t.Run("List_skips_soft_deleted_and_reports_total", func(t *testing.T) {
 		c := newContract(t)
 		seedUser(t, c.Users, userA)
@@ -276,21 +328,43 @@ func RunUserRepositoryContract(t *testing.T, newContract Factory) {
 		}
 	})
 
-	t.Run("Delete_soft_deletes", func(t *testing.T) {
+	t.Run("Delete_soft_deletes_but_GetBySub_still_returns_row", func(t *testing.T) {
 		c := newContract(t)
 		seedUser(t, c.Users, userA)
 
 		if err := c.Users.Delete(context.Background(), userA); err != nil {
 			t.Fatalf("Delete: %v", err)
 		}
-		// Row still retrievable by sub (soft-delete is transparent to
-		// GetBySub per contract), but List filters it.
+
+		// Row still retrievable by sub: soft-delete is transparent to
+		// GetBySub per the interface contract, so handlers can decide
+		// whether to surface deleted users (e.g. for "@user was
+		// removed" placeholders). List / ListBySubs however filter.
+		got, err := c.Users.GetBySub(context.Background(), userA)
+		if err != nil {
+			t.Fatalf("GetBySub: %v", err)
+		}
+		if got == nil {
+			t.Fatalf("expected GetBySub to return soft-deleted row, got nil")
+		}
+		if got.DeletedAt == nil {
+			t.Errorf("expected DeletedAt populated on returned row, got nil")
+		}
+
 		_, total, err := c.Users.List(context.Background(), 10, 0)
 		if err != nil {
 			t.Fatalf("List: %v", err)
 		}
 		if total != 0 {
 			t.Errorf("expected List total=0 after soft-delete, got %d", total)
+		}
+
+		bysubs, err := c.Users.ListBySubs(context.Background(), []string{userA})
+		if err != nil {
+			t.Fatalf("ListBySubs: %v", err)
+		}
+		if _, present := bysubs[userA]; present {
+			t.Errorf("expected soft-deleted user absent from ListBySubs, got present")
 		}
 	})
 }
