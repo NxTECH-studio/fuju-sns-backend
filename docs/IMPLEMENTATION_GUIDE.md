@@ -159,7 +159,7 @@ healthcheck: pg_isready (10秒間隔)
 
 **主要テーブル**:
 - `users` - AuthCore 鏡像 + SNS 固有プロフィール（Bio/Banner、`is_admin`）
-- `posts` - 投稿（`reply_to_post_id` により reply を表現）
+- `posts` - 投稿（`parent_post_id` により reply を表現）
 - `images` - 画像メタデータ
 
 #### 3. Adminer Service (`fuju-adminer`)
@@ -571,7 +571,7 @@ id: 投稿 ID (ULID)
 
 現行 API では reply は投稿そのものとして表現される：
 
-- `POST /posts` に `reply_to_post_id` を指定して返信を作成
+- `POST /posts` に `parent_post_id` を指定して返信を作成
 - `DELETE /posts/{id}` で返信を削除（所有者のみ）
 - `GET /posts/{id}/replies` で直接の返信一覧を取得
 

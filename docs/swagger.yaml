@@ -1040,6 +1040,23 @@ components:
           type: string
           maxLength: 64
 
+    PostAuthor:
+      type: object
+      description: |
+        Minimal author card embedded in a Post response. Field names
+        end with `_cached` to reflect that they mirror AuthCore
+        profile data with a 1h TTL.
+      required: [sub, display_name_cached, display_id_cached, icon_url_cached]
+      properties:
+        sub:
+          $ref: "#/components/schemas/ULID"
+        display_name_cached:
+          type: string
+        display_id_cached:
+          type: string
+        icon_url_cached:
+          type: string
+
     PostOGPPreview:
       type: object
       description: |
@@ -1136,22 +1153,14 @@ components:
           maxItems: 10
         author:
           type: object
-          nullable: true
           description: |
             Minimal author card. May be null when the author record has
             been deleted after the post was created. Field names end
             with `_cached` to reflect that they are AuthCore-sourced
             with a 1h TTL.
-          required: [sub, display_name_cached, display_id_cached, icon_url_cached]
-          properties:
-            sub:
-              $ref: "#/components/schemas/ULID"
-            display_name_cached:
-              type: string
-            display_id_cached:
-              type: string
-            icon_url_cached:
-              type: string
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/PostAuthor"
         ogp_previews:
           type: array
           items:

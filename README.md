@@ -199,14 +199,14 @@ the FE-facing flow (token refresh, `/me` hydrate, admin flag, CORS) and
 # Create database
 createdb fuju
 
-# Run migrations (to be implemented)
-make migrate
+# Apply migrations (PostgreSQL must be running)
+make db-init
 ```
 
 ### Schema
 
 - **users**: SNS-local mirror cache of AuthCore profile + bio / banner / is_admin
-- **posts**: User posts, including replies via `reply_to_post_id`
+- **posts**: User posts, including replies via `parent_post_id`
 - **likes**: Like relationships between users and posts
 - **images**: Uploaded image metadata (Cloudflare R2 storage keys)
 
