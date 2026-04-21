@@ -89,4 +89,6 @@ $RECYCLE.BIN/
 # Debugger
 .delve/
 
-server
+# Local build output of `go build ./cmd/server` at repo root. Anchored
+# to / so it does not also ignore cmd/server/ (the source directory).
+/server
