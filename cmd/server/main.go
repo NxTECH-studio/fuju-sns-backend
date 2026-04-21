@@ -92,14 +92,14 @@ func main() {
 	postGetUC := postusecase.NewGetPostUseCase(postRepo, postHydrator)
 	postCreateUC := postusecase.
 		NewCreatePostUseCase(postRepo, imageRepo, tagRepo, tagEx).
-		WithPostCommitHook(ogpEnqueuer.EnqueueForPost)
+		WithCommitHook(ogpEnqueuer.EnqueueForPost)
 	postDeleteUC := postusecase.NewDeletePostUseCase(postRepo)
 	postListUC := postusecase.NewListPostsUseCase(postRepo, postHydrator)
 	postRepliesUC := postusecase.NewListRepliesUseCase(postRepo, postHydrator)
 	postLikeUC := postusecase.NewLikePostUseCase(postRepo, likeRepo)
 	postUnlikeUC := postusecase.NewUnlikePostUseCase(postRepo, likeRepo)
 
-	followUC := followusecase.NewFollowUseCase(userRepo, followRepo)
+	followUC := followusecase.NewUseCase(userRepo, followRepo)
 	unfollowUC := followusecase.NewUnfollowUseCase(userRepo, followRepo)
 	listFollowersUC := followusecase.NewListFollowersUseCase(userRepo, followRepo)
 	listFollowingUC := followusecase.NewListFollowingUseCase(userRepo, followRepo)

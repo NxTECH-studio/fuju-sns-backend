@@ -159,7 +159,7 @@ func checkURL(u *url.URL) error {
 	if u == nil {
 		return ErrBlockedScheme
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
+	if u.Scheme != schemeHTTP && u.Scheme != schemeHTTPS {
 		return ErrBlockedScheme
 	}
 	host := u.Hostname()

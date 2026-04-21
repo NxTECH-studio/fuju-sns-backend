@@ -68,20 +68,19 @@ func (e *RegexTagExtractor) Extract(_ context.Context, content string) ([]string
 	seen := make(map[string]struct{})
 	out := make([]string, 0, domain.MaxTagsPerPost)
 
-	add := func(name string) bool {
+	add := func(name string) {
 		norm := strings.ToLower(strings.TrimSpace(name))
 		if norm == "" {
-			return false
+			return
 		}
 		if len(norm) > domain.MaxTagNameLen {
-			return false
+			return
 		}
 		if _, dup := seen[norm]; dup {
-			return false
+			return
 		}
 		seen[norm] = struct{}{}
 		out = append(out, norm)
-		return true
 	}
 
 	for _, m := range hashtagPattern.FindAllStringSubmatch(content, -1) {

@@ -17,11 +17,11 @@ const DefaultPageLimit = 20
 // MaxPageLimit caps the per-request list size.
 const MaxPageLimit = 50
 
-// PostCommitHook is a best-effort callback invoked after a post is
+// CommitHook is a best-effort callback invoked after a post is
 // persisted. Implementations must not panic or block long — the create
 // API returns to the client immediately after the hook runs. Current
 // user: the OGP enqueuer (internal/usecase/ogp).
-type PostCommitHook func(ctx context.Context, post *domain.Post)
+type CommitHook func(ctx context.Context, post *domain.Post)
 
 // CreatePostUseCase creates a post with optional images and a parent
 // reply reference. Tag extraction is delegated to a TagExtractor.
@@ -30,7 +30,7 @@ type CreatePostUseCase struct {
 	imageRepo    repository.ImageRepository
 	tagRepo      repository.TagRepository
 	tagExtractor domain.TagExtractor
-	onCommit     PostCommitHook
+	onCommit     CommitHook
 }
 
 // NewCreatePostUseCase constructs a CreatePostUseCase.
@@ -48,16 +48,16 @@ func NewCreatePostUseCase(
 	}
 }
 
-// WithPostCommitHook installs a best-effort post-commit callback.
+// WithCommitHook installs a best-effort post-commit callback.
 // Returns the receiver so it chains onto NewCreatePostUseCase.
-func (uc *CreatePostUseCase) WithPostCommitHook(hook PostCommitHook) *CreatePostUseCase {
+func (uc *CreatePostUseCase) WithCommitHook(hook CommitHook) *CreatePostUseCase {
 	uc.onCommit = hook
 	return uc
 }
 
 // Execute validates, resolves the thread root, verifies image ownership,
 // extracts tags, and persists the post.
-func (uc *CreatePostUseCase) Execute(ctx context.Context, userSub string, req *domain.CreatePostRequest) (*PostDetail, error) {
+func (uc *CreatePostUseCase) Execute(ctx context.Context, userSub string, req *domain.CreatePostRequest) (*Detail, error) {
 	if userSub == "" {
 		return nil, errors.Unauthorized("authentication required")
 	}
@@ -148,7 +148,7 @@ func (uc *CreatePostUseCase) Execute(ctx context.Context, userSub string, req *d
 		uc.onCommit(ctx, created)
 	}
 
-	return &PostDetail{Post: created, Images: images, Tags: tags}, nil
+	return &Detail{Post: created, Images: images, Tags: tags}, nil
 }
 
 // GetPostUseCase retrieves a post hydrated with its images, tags,
@@ -163,8 +163,8 @@ func NewGetPostUseCase(postRepo repository.PostRepository, hydrator *Hydrator) *
 	return &GetPostUseCase{postRepo: postRepo, hydrator: hydrator}
 }
 
-// Execute returns a single PostDetail. viewerSub may be nil (anonymous).
-func (uc *GetPostUseCase) Execute(ctx context.Context, postID string, viewerSub *string) (*PostDetail, error) {
+// Execute returns a single Detail. viewerSub may be nil (anonymous).
+func (uc *GetPostUseCase) Execute(ctx context.Context, postID string, viewerSub *string) (*Detail, error) {
 	if postID == "" {
 		return nil, errors.InvalidRequest("post id is required", nil)
 	}
@@ -227,9 +227,9 @@ func NewListPostsUseCase(postRepo repository.PostRepository, hydrator *Hydrator)
 	return &ListPostsUseCase{postRepo: postRepo, hydrator: hydrator}
 }
 
-// Execute returns a page of PostDetail and the next cursor (empty string
+// Execute returns a page of Detail and the next cursor (empty string
 // when there are no more rows).
-func (uc *ListPostsUseCase) Execute(ctx context.Context, userID *string, cursor *string, limit int, viewerSub *string) ([]*PostDetail, string, error) {
+func (uc *ListPostsUseCase) Execute(ctx context.Context, userID *string, cursor *string, limit int, viewerSub *string) ([]*Detail, string, error) {
 	limit = NormalizeLimit(limit)
 	posts, nextCursor, err := uc.postRepo.List(ctx, userID, cursor, limit)
 	if err != nil {
@@ -254,7 +254,7 @@ func NewListRepliesUseCase(postRepo repository.PostRepository, hydrator *Hydrato
 }
 
 // Execute returns direct replies of postID.
-func (uc *ListRepliesUseCase) Execute(ctx context.Context, postID string, cursor *string, limit int, viewerSub *string) ([]*PostDetail, string, error) {
+func (uc *ListRepliesUseCase) Execute(ctx context.Context, postID string, cursor *string, limit int, viewerSub *string) ([]*Detail, string, error) {
 	if postID == "" {
 		return nil, "", errors.InvalidRequest("post id is required", nil)
 	}

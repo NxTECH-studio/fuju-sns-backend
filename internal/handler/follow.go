@@ -11,7 +11,7 @@ import (
 
 // FollowHandler wires the HTTP layer onto the follow use cases.
 type FollowHandler struct {
-	follow        *followusecase.FollowUseCase
+	follow        *followusecase.UseCase
 	unfollow      *followusecase.UnfollowUseCase
 	listFollowers *followusecase.ListFollowersUseCase
 	listFollowing *followusecase.ListFollowingUseCase
@@ -19,7 +19,7 @@ type FollowHandler struct {
 
 // NewFollowHandler constructs a FollowHandler.
 func NewFollowHandler(
-	follow *followusecase.FollowUseCase,
+	follow *followusecase.UseCase,
 	unfollow *followusecase.UnfollowUseCase,
 	listFollowers *followusecase.ListFollowersUseCase,
 	listFollowing *followusecase.ListFollowingUseCase,

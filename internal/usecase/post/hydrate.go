@@ -8,11 +8,11 @@ import (
 	"github.com/fuju/backend/pkg/errors"
 )
 
-// PostDetail bundles a Post with its images, tags, per-viewer liked flag,
+// Detail bundles a Post with its images, tags, per-viewer liked flag,
 // the author's user row (for display_name / icon_url), a per-viewer
 // following_author flag, and any attached OGP previews. Author,
 // FollowingAuthor, and OGPPreviews are populated by the Hydrator.
-type PostDetail struct {
+type Detail struct {
 	Post            *domain.Post
 	Images          []*domain.Image
 	Tags            []*domain.Tag
@@ -23,7 +23,7 @@ type PostDetail struct {
 }
 
 // Hydrator batches the image / tag / like / author / follow / OGP
-// lookups needed to produce PostDetail slices from a list of Post. It
+// lookups needed to produce Detail slices from a list of Post. It
 // is shared by the post list endpoints and the timeline endpoints so
 // the N+1 avoidance strategy lives in one place.
 type Hydrator struct {
@@ -54,11 +54,11 @@ func NewHydrator(
 	}
 }
 
-// Hydrate resolves a page of posts into PostDetail records. Five (or six,
+// Hydrate resolves a page of posts into Detail records. Five (or six,
 // with a viewer) database calls total, regardless of page size.
-func (h *Hydrator) Hydrate(ctx context.Context, posts []*domain.Post, viewerSub *string) ([]*PostDetail, error) {
+func (h *Hydrator) Hydrate(ctx context.Context, posts []*domain.Post, viewerSub *string) ([]*Detail, error) {
 	if len(posts) == 0 {
-		return []*PostDetail{}, nil
+		return []*Detail{}, nil
 	}
 
 	postIDs := make([]string, len(posts))
@@ -102,9 +102,9 @@ func (h *Hydrator) Hydrate(ctx context.Context, posts []*domain.Post, viewerSub 
 		}
 	}
 
-	out := make([]*PostDetail, len(posts))
+	out := make([]*Detail, len(posts))
 	for i, p := range posts {
-		out[i] = &PostDetail{
+		out[i] = &Detail{
 			Post:            p,
 			Images:          imagesByPost[p.ID],
 			Tags:            tagsByPost[p.ID],
@@ -135,7 +135,7 @@ func filterOKPreviews(in []*domain.OGPPreview) []*domain.OGPPreview {
 
 // HydrateOne is a convenience wrapper for endpoints that fetched exactly
 // one post (GetPostUseCase). Returns nil when the input slice is empty.
-func (h *Hydrator) HydrateOne(ctx context.Context, post *domain.Post, viewerSub *string) (*PostDetail, error) {
+func (h *Hydrator) HydrateOne(ctx context.Context, post *domain.Post, viewerSub *string) (*Detail, error) {
 	details, err := h.Hydrate(ctx, []*domain.Post{post}, viewerSub)
 	if err != nil {
 		return nil, err

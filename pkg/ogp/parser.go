@@ -198,7 +198,7 @@ func resolveSafeURL(base, ref string) string {
 	if err != nil {
 		return ""
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
+	if u.Scheme != schemeHTTP && u.Scheme != schemeHTTPS {
 		return ""
 	}
 	return abs
