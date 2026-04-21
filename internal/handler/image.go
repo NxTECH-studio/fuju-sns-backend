@@ -17,31 +17,31 @@ import (
 // publicImageView is the JSON shape returned by image endpoints. It
 // exists so the on-wire keys match the rest of the API (snake_case)
 // instead of leaking Go's PascalCase field names from domain.Image.
+// StorageKey intentionally does not appear on the wire: it is an
+// internal R2 object key that clients should not depend on.
 type publicImageView struct {
-	ID         string     `json:"id"`
-	StorageKey string     `json:"storage_key"`
-	FileName   string     `json:"file_name"`
-	MimeType   string     `json:"mime_type"`
-	FileSize   int64      `json:"file_size"`
-	PublicURL  string     `json:"public_url"`
-	UserID     string     `json:"user_id"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
-	DeletedAt  *time.Time `json:"deleted_at,omitempty"`
+	ID        string     `json:"id"`
+	FileName  string     `json:"file_name"`
+	MimeType  string     `json:"mime_type"`
+	FileSize  int64      `json:"file_size"`
+	PublicURL string     `json:"public_url"`
+	UserID    string     `json:"user_id"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	DeletedAt *time.Time `json:"deleted_at,omitempty"`
 }
 
 func toPublicImageView(img *domain.Image) publicImageView {
 	return publicImageView{
-		ID:         img.ID,
-		StorageKey: img.StorageKey,
-		FileName:   img.FileName,
-		MimeType:   img.MimeType,
-		FileSize:   img.FileSize,
-		PublicURL:  img.PublicURL,
-		UserID:     img.UserID,
-		CreatedAt:  img.CreatedAt,
-		UpdatedAt:  img.UpdatedAt,
-		DeletedAt:  img.DeletedAt,
+		ID:        img.ID,
+		FileName:  img.FileName,
+		MimeType:  img.MimeType,
+		FileSize:  img.FileSize,
+		PublicURL: img.PublicURL,
+		UserID:    img.UserID,
+		CreatedAt: img.CreatedAt,
+		UpdatedAt: img.UpdatedAt,
+		DeletedAt: img.DeletedAt,
 	}
 }
 
