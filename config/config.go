@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -40,9 +41,10 @@ type Config struct {
 	DBMaxConns  int32  // optional; 0 = pgx default
 	DBMinConns  int32  // optional; 0 = pgx default
 
-	// Repository backend: "inmemory" | "postgres" | "" (auto).
-	// Use RepoBackend() to resolve the effective value.
-	RepoBackendRaw string
+	// repoBackendRaw is the literal REPO_BACKEND env value. Callers
+	// use the RepoBackend() method to resolve the effective backend;
+	// keeping the raw string unexported forces that indirection.
+	repoBackendRaw string
 
 	// AuthCore
 	AuthCoreBaseURL            string
@@ -76,7 +78,7 @@ func Load() (*Config, error) {
 		DatabaseURL:                getEnv("DATABASE_URL", ""),
 		DBMaxConns:                 int32(getEnvInt("DB_MAX_CONNS", 0)),
 		DBMinConns:                 int32(getEnvInt("DB_MIN_CONNS", 0)),
-		RepoBackendRaw:             getEnv("REPO_BACKEND", ""),
+		repoBackendRaw:             getEnv("REPO_BACKEND", ""),
 		AuthCoreBaseURL:            getEnv("AUTHCORE_BASE_URL", ""),
 		AuthCoreClientID:           getEnv("AUTHCORE_CLIENT_ID", ""),
 		AuthCoreClientSecret:       getEnv("AUTHCORE_CLIENT_SECRET", ""),
@@ -101,9 +103,9 @@ func Load() (*Config, error) {
 //   - unset + Environment == "development" → inmemory (fast local start)
 //   - unset + anything else → postgres (production-safe default)
 func (c *Config) RepoBackend() string {
-	switch c.RepoBackendRaw {
+	switch c.repoBackendRaw {
 	case RepoBackendInMemory, RepoBackendPostgres:
-		return c.RepoBackendRaw
+		return c.repoBackendRaw
 	}
 	if c.Environment == "development" {
 		return RepoBackendInMemory
@@ -146,25 +148,34 @@ func (c *Config) DSN() string {
 // when the effective backend is postgres AND DATABASE_URL is absent;
 // running the in-memory backend in dev should not demand a DB config.
 func (c *Config) Validate() error {
-	if c.RepoBackendRaw != "" &&
-		c.RepoBackendRaw != RepoBackendInMemory &&
-		c.RepoBackendRaw != RepoBackendPostgres {
+	if c.repoBackendRaw != "" &&
+		c.repoBackendRaw != RepoBackendInMemory &&
+		c.repoBackendRaw != RepoBackendPostgres {
 		return fmt.Errorf("REPO_BACKEND must be %q or %q, got %q",
-			RepoBackendInMemory, RepoBackendPostgres, c.RepoBackendRaw)
+			RepoBackendInMemory, RepoBackendPostgres, c.repoBackendRaw)
 	}
 
-	if c.RepoBackend() == RepoBackendPostgres && c.DatabaseURL == "" {
-		if c.DBHost == "" {
-			return fmt.Errorf("DB_HOST is required when REPO_BACKEND=postgres and DATABASE_URL is unset")
-		}
-		if c.DBName == "" {
-			return fmt.Errorf("DB_NAME is required when REPO_BACKEND=postgres and DATABASE_URL is unset")
-		}
-		if c.DBUser == "" {
-			return fmt.Errorf("DB_USER is required when REPO_BACKEND=postgres and DATABASE_URL is unset")
-		}
-		if c.DBPassword == "" {
-			return fmt.Errorf("DB_PASSWORD is required when REPO_BACKEND=postgres and DATABASE_URL is unset")
+	if c.RepoBackend() == RepoBackendPostgres {
+		if c.DatabaseURL != "" {
+			// Reject non-postgres schemes up front; pgx would eventually
+			// fail in NewPool, but catching it at Load keeps startup
+			// error messages close to the config source.
+			if !strings.HasPrefix(c.DatabaseURL, "postgres://") && !strings.HasPrefix(c.DatabaseURL, "postgresql://") {
+				return fmt.Errorf("DATABASE_URL must start with postgres:// or postgresql://")
+			}
+		} else {
+			if c.DBHost == "" {
+				return fmt.Errorf("DB_HOST is required when REPO_BACKEND=postgres and DATABASE_URL is unset")
+			}
+			if c.DBName == "" {
+				return fmt.Errorf("DB_NAME is required when REPO_BACKEND=postgres and DATABASE_URL is unset")
+			}
+			if c.DBUser == "" {
+				return fmt.Errorf("DB_USER is required when REPO_BACKEND=postgres and DATABASE_URL is unset")
+			}
+			if c.DBPassword == "" {
+				return fmt.Errorf("DB_PASSWORD is required when REPO_BACKEND=postgres and DATABASE_URL is unset")
+			}
 		}
 	}
 

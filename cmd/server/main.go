@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -241,10 +242,17 @@ func main() {
 	}()
 
 	// OGP background worker. Tied to the background context that is
-	// cancelled at shutdown so the goroutine exits cleanly.
+	// cancelled at shutdown so the goroutine exits cleanly. The
+	// WaitGroup lets the shutdown path block until the worker has
+	// observed the cancellation — without that, deferred cleanup
+	// (which closes the pgxpool) can race the worker's next
+	// queue.Claim and surface as "pool closed" errors on the way out.
 	ogpFetcher := ogp.NewFetcher(&ogp.Options{UserAgent: cfg.OGPUserAgent})
 	ogpWorker := ogpusecase.NewWorker(ogpJobQueue, ogpCacheRepo, postRepo, ogpFetcher, log)
+	var workerWG sync.WaitGroup
+	workerWG.Add(1)
 	go func() {
+		defer workerWG.Done()
 		log.Info(ctx, "OGP worker started")
 		ogpWorker.Run(ctx)
 		log.Info(ctx, "OGP worker stopped")
@@ -264,8 +272,11 @@ func main() {
 		log.Error(shutdownCtx, "Server shutdown error", err)
 	}
 
-	// Cancel the background context so the OGP worker exits.
+	// Cancel the background context so the OGP worker exits, then
+	// wait for it to finish before letting the deferred cleanup
+	// tear down the pgxpool.
 	cancelBackground()
+	workerWG.Wait()
 
 	log.Info(ctx, "Server stopped")
 }

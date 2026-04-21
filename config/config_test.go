@@ -12,7 +12,7 @@ func TestRepoBackend_explicit_overrides_environment(t *testing.T) {
 		{raw: RepoBackendPostgres, environment: "development", want: RepoBackendPostgres},
 	}
 	for _, tc := range cases {
-		c := &Config{RepoBackendRaw: tc.raw, Environment: tc.environment}
+		c := &Config{repoBackendRaw: tc.raw, Environment: tc.environment}
 		if got := c.RepoBackend(); got != tc.want {
 			t.Errorf("raw=%q env=%q: want %s, got %s", tc.raw, tc.environment, tc.want, got)
 		}
@@ -40,7 +40,7 @@ func TestRepoBackend_auto_picks_by_environment(t *testing.T) {
 func TestValidate_inmemory_skips_db_checks(t *testing.T) {
 	c := &Config{
 		Environment:          "development",
-		RepoBackendRaw:       RepoBackendInMemory,
+		repoBackendRaw:       RepoBackendInMemory,
 		AuthCoreBaseURL:      "http://localhost",
 		AuthCoreClientID:     "x",
 		AuthCoreClientSecret: "y",
@@ -53,7 +53,7 @@ func TestValidate_inmemory_skips_db_checks(t *testing.T) {
 func TestValidate_postgres_requires_db_fields_when_no_url(t *testing.T) {
 	c := &Config{
 		Environment:          "production",
-		RepoBackendRaw:       RepoBackendPostgres,
+		repoBackendRaw:       RepoBackendPostgres,
 		AuthCoreBaseURL:      "http://localhost",
 		AuthCoreClientID:     "x",
 		AuthCoreClientSecret: "y",
@@ -66,7 +66,7 @@ func TestValidate_postgres_requires_db_fields_when_no_url(t *testing.T) {
 func TestValidate_postgres_accepts_database_url_alone(t *testing.T) {
 	c := &Config{
 		Environment:          "production",
-		RepoBackendRaw:       RepoBackendPostgres,
+		repoBackendRaw:       RepoBackendPostgres,
 		DatabaseURL:          "postgres://u:p@h/d",
 		AuthCoreBaseURL:      "http://localhost",
 		AuthCoreClientID:     "x",
@@ -77,10 +77,45 @@ func TestValidate_postgres_accepts_database_url_alone(t *testing.T) {
 	}
 }
 
+func TestValidate_rejects_non_postgres_database_url_scheme(t *testing.T) {
+	for _, dsn := range []string{
+		"mysql://u:p@h/d",
+		"file:///etc/passwd",
+		"postgres.invalid://u:p@h/d",
+		"http://u:p@h/d",
+	} {
+		c := &Config{
+			Environment:          "production",
+			repoBackendRaw:       RepoBackendPostgres,
+			DatabaseURL:          dsn,
+			AuthCoreBaseURL:      "http://localhost",
+			AuthCoreClientID:     "x",
+			AuthCoreClientSecret: "y",
+		}
+		if err := c.Validate(); err == nil {
+			t.Errorf("DATABASE_URL=%q should fail validation", dsn)
+		}
+	}
+}
+
+func TestValidate_accepts_postgresql_url_scheme(t *testing.T) {
+	c := &Config{
+		Environment:          "production",
+		repoBackendRaw:       RepoBackendPostgres,
+		DatabaseURL:          "postgresql://u:p@h/d",
+		AuthCoreBaseURL:      "http://localhost",
+		AuthCoreClientID:     "x",
+		AuthCoreClientSecret: "y",
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("postgresql:// scheme should pass: %v", err)
+	}
+}
+
 func TestValidate_rejects_unknown_repo_backend(t *testing.T) {
 	c := &Config{
 		Environment:          "development",
-		RepoBackendRaw:       "redis",
+		repoBackendRaw:       "redis",
 		AuthCoreBaseURL:      "http://localhost",
 		AuthCoreClientID:     "x",
 		AuthCoreClientSecret: "y",
