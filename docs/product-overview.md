@@ -127,21 +127,9 @@ enqueue し、バックグラウンドワーカーが取得・キャッシュし
   で検査し、申告された Content-Type と一致することも求めます。
 - 投稿への紐付けは `POST /posts` 時の `image_ids` 配列で行います。アップロード済み
   画像のうち自分の所有物でないものが含まれていれば 400 を返します。
-
-### 既知の leak: Image レスポンスの PascalCase キー
-
-現在 `POST /v1/images` / `GET /v1/images` が返す Image レスポンスは Go の
-`domain.Image` を `encoding/json` のデフォルト（= PascalCase）のまま吐き出して
-います。swagger にもその旨明記していますが、フロントエンドは当面以下のキーを
-受け取る想定でお願いします。
-
-```
-ID, StorageKey, FileName, MimeType, FileSize, PublicURL, UserID,
-CreatedAt, UpdatedAt, DeletedAt (optional)
-```
-
-他のエンドポイントは一貫して `snake_case` なので、Image だけ例外になっている
-状態です。**実装修正タスクを別途 follow-up として切る予定**です。
+- レスポンスは他エンドポイントと同じ `snake_case`（`id`, `public_url`,
+  `file_name`, `mime_type`, `file_size`, `created_at`, ...）。`storage_key` は
+  内部値ですが当面互換のため残しています（FE からは無視して構いません）。
 
 ## 8. Admin / バッジ
 

@@ -1199,40 +1199,41 @@ components:
     Image:
       type: object
       description: |
-        Uploaded image metadata. The on-wire shape is Go's default JSON
-        encoding of `domain.Image`; field names are PascalCase.
+        Uploaded image metadata. `public_url` is the URL the client
+        should embed; `storage_key` is surfaced for compatibility and
+        will be removed once no client depends on it.
       required:
-        - ID
-        - StorageKey
-        - FileName
-        - MimeType
-        - FileSize
-        - PublicURL
-        - UserID
-        - CreatedAt
-        - UpdatedAt
+        - id
+        - storage_key
+        - file_name
+        - mime_type
+        - file_size
+        - public_url
+        - user_id
+        - created_at
+        - updated_at
       properties:
-        ID:
+        id:
           $ref: "#/components/schemas/ULID"
-        StorageKey:
+        storage_key:
           type: string
-        FileName:
+        file_name:
           type: string
-        MimeType:
+        mime_type:
           type: string
-        FileSize:
+        file_size:
           type: integer
           format: int64
           minimum: 0
-        PublicURL:
+        public_url:
           type: string
-        UserID:
+        user_id:
           $ref: "#/components/schemas/ULID"
-        CreatedAt:
+        created_at:
           $ref: "#/components/schemas/Timestamp"
-        UpdatedAt:
+        updated_at:
           $ref: "#/components/schemas/Timestamp"
-        DeletedAt:
+        deleted_at:
           type: string
           format: date-time
           nullable: true
