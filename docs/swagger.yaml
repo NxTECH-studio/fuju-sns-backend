@@ -1200,11 +1200,9 @@ components:
       type: object
       description: |
         Uploaded image metadata. `public_url` is the URL the client
-        should embed; `storage_key` is surfaced for compatibility and
-        will be removed once no client depends on it.
+        should embed.
       required:
         - id
-        - storage_key
         - file_name
         - mime_type
         - file_size
@@ -1215,8 +1213,6 @@ components:
       properties:
         id:
           $ref: "#/components/schemas/ULID"
-        storage_key:
-          type: string
         file_name:
           type: string
         mime_type:

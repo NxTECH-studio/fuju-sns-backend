@@ -128,8 +128,8 @@ enqueue し、バックグラウンドワーカーが取得・キャッシュし
 - 投稿への紐付けは `POST /posts` 時の `image_ids` 配列で行います。アップロード済み
   画像のうち自分の所有物でないものが含まれていれば 400 を返します。
 - レスポンスは他エンドポイントと同じ `snake_case`（`id`, `public_url`,
-  `file_name`, `mime_type`, `file_size`, `created_at`, ...）。`storage_key` は
-  内部値ですが当面互換のため残しています（FE からは無視して構いません）。
+  `file_name`, `mime_type`, `file_size`, `created_at`, ...）。内部の R2 object
+  key（`storage_key`）はレスポンスに含まれません。
 
 ## 8. Admin / バッジ
 
