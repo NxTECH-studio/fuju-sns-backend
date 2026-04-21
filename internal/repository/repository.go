@@ -3,6 +3,7 @@ package repository
 
 import (
 	"context"
+	"time"
 
 	"github.com/fuju/backend/internal/domain"
 )
@@ -29,22 +30,62 @@ type UserRepository interface {
 	Delete(ctx context.Context, sub string) error
 }
 
-// PostRepository defines post persistence operations.
+// PostRepository defines post persistence operations. All list methods use
+// cursor-based pagination keyed on the ULID primary key (which is
+// lexicographically sorted by time). `cursor == nil` means "start from the
+// newest". An empty returned `nextCursor` means "no more results".
 type PostRepository interface {
+	// GetByID returns (nil, nil) for missing OR soft-deleted posts.
 	GetByID(ctx context.Context, id string) (*domain.Post, error)
-	List(ctx context.Context, userID *string, limit, offset int) ([]*domain.Post, int, error)
-	Create(ctx context.Context, post *domain.Post) (*domain.Post, error)
+
+	// Create inserts the post plus its post_images and post_tags join rows
+	// in a single logical transaction. imageIDs ordering is preserved as
+	// post_images.position (0..N-1). tagIDs have no defined ordering.
+	Create(ctx context.Context, post *domain.Post, imageIDs []string, tagIDs []string) (*domain.Post, error)
+
+	// Delete soft-deletes the post.
 	Delete(ctx context.Context, id string) error
-	IncrementCommentCount(ctx context.Context, postID string) error
-	DecrementCommentCount(ctx context.Context, postID string) error
+
+	// List returns posts ordered by id DESC. Pass userID != nil to scope to
+	// a single author.
+	List(ctx context.Context, userID *string, cursor *string, limit int) ([]*domain.Post, string, error)
+
+	// ListByUserIDs returns posts authored by any sub in userIDs, ordered
+	// by id DESC. Used by the follow timeline in a later task.
+	ListByUserIDs(ctx context.Context, userIDs []string, cursor *string, limit int) ([]*domain.Post, string, error)
+
+	// ListReplies returns direct replies (parent_post_id == postID).
+	ListReplies(ctx context.Context, postID string, cursor *string, limit int) ([]*domain.Post, string, error)
+
+	IncrementRepliesCount(ctx context.Context, postID string) error
+	DecrementRepliesCount(ctx context.Context, postID string) error
+	IncrementLikesCount(ctx context.Context, postID string) error
+	DecrementLikesCount(ctx context.Context, postID string) error
 }
 
-// CommentRepository defines comment persistence operations.
-type CommentRepository interface {
-	GetByID(ctx context.Context, id string) (*domain.Comment, error)
-	ListByPostID(ctx context.Context, postID string, limit, offset int) ([]*domain.Comment, int, error)
-	Create(ctx context.Context, comment *domain.Comment) (*domain.Comment, error)
-	Delete(ctx context.Context, id string) error
+// LikeRepository defines like persistence operations. Create and Delete
+// are idempotent: the boolean return tells the app whether the row state
+// actually changed so it can adjust the denormalized likes counter at
+// most once.
+type LikeRepository interface {
+	Create(ctx context.Context, userID, postID string) (bool, error)
+	Delete(ctx context.Context, userID, postID string) (bool, error)
+	IsLikedBy(ctx context.Context, userID, postID string) (bool, error)
+	// ListLikedPostIDsByUser returns a map postID -> true for each post in
+	// postIDs the user has liked. Unliked posts are absent from the map.
+	ListLikedPostIDsByUser(ctx context.Context, userID string, postIDs []string) (map[string]bool, error)
+}
+
+// TagRepository defines tag persistence operations.
+type TagRepository interface {
+	// UpsertByNames inserts any name not yet present and returns the full
+	// set of Tag rows for the given names. Names must already be
+	// normalized (lower-cased, trimmed) by the caller.
+	UpsertByNames(ctx context.Context, names []string) ([]*domain.Tag, error)
+	ListByPostID(ctx context.Context, postID string) ([]*domain.Tag, error)
+	// ListByPostIDs batches ListByPostID across posts. Posts with no tags
+	// are absent from the returned map.
+	ListByPostIDs(ctx context.Context, postIDs []string) (map[string][]*domain.Tag, error)
 }
 
 // ImageRepository defines image persistence operations.
@@ -53,4 +94,30 @@ type ImageRepository interface {
 	GetByUserID(ctx context.Context, userID string) ([]*domain.Image, error)
 	Create(ctx context.Context, image *domain.Image) (*domain.Image, error)
 	Delete(ctx context.Context, id string) error
+	// ListByPostID returns the images attached to a post ordered by
+	// post_images.position ascending.
+	ListByPostID(ctx context.Context, postID string) ([]*domain.Image, error)
+	// ListByPostIDs batches ListByPostID. Posts with no images are absent
+	// from the returned map.
+	ListByPostIDs(ctx context.Context, postIDs []string) (map[string][]*domain.Image, error)
+}
+
+// BadgeRepository defines badge master + user_badges persistence operations.
+// ListByUserID / ListByUserIDs return only currently-active grants
+// (expires_at IS NULL OR expires_at > NOW()).
+type BadgeRepository interface {
+	// Master table.
+	ListAll(ctx context.Context) ([]*domain.Badge, error)
+	GetByKey(ctx context.Context, key string) (*domain.Badge, error)
+	GetByID(ctx context.Context, id string) (*domain.Badge, error)
+	Create(ctx context.Context, badge *domain.Badge) (*domain.Badge, error)
+	Update(ctx context.Context, badge *domain.Badge) (*domain.Badge, error)
+
+	// User grants.
+	Grant(ctx context.Context, userID, badgeID, grantedBy string, expiresAt *time.Time, reason string) error
+	Revoke(ctx context.Context, userID, badgeID string) error
+	ListByUserID(ctx context.Context, userID string) ([]*domain.Badge, error)
+
+	// N+1 avoidance for list endpoints: one call resolves many users.
+	ListByUserIDs(ctx context.Context, userIDs []string) (map[string][]*domain.Badge, error)
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/fuju/backend/internal/domain"
 	"github.com/fuju/backend/internal/repository/inmemory"
+	badgeusecase "github.com/fuju/backend/internal/usecase/badge"
 	userusecase "github.com/fuju/backend/internal/usecase/user"
 	"github.com/fuju/backend/pkg/response"
 )
@@ -107,7 +108,10 @@ func TestGetUserHandler(t *testing.T) {
 				}
 			}
 			getUC := userusecase.NewGetUserUseCase(repo)
-			h := NewUserHandler(getUC, nil, nil, nil)
+			badgeRepo := inmemory.NewBadgeRepository()
+			badgeGetUC := badgeusecase.NewGetUserBadgesUseCase(badgeRepo)
+			badgeBatchUC := badgeusecase.NewListUserBadgesBatchUseCase(badgeRepo)
+			h := NewUserHandler(getUC, nil, nil, nil, badgeGetUC, badgeBatchUC)
 
 			req := httptest.NewRequest("GET", "/users/"+tc.sub, nil)
 			req.SetPathValue("sub", tc.sub)
