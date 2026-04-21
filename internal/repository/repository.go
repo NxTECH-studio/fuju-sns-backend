@@ -136,8 +136,10 @@ type OGPCacheRepository interface {
 // are the lifecycle transitions the worker drives.
 type OGPJobQueue interface {
 	// Enqueue adds a new queued job. The caller supplies a ULID id; the
-	// worker uses it for telemetry / idempotency.
-	Enqueue(ctx context.Context, id, urlHash, url, postID string) error
+	// worker uses it for telemetry / idempotency. position is the 0-based
+	// index of the URL within the post's content and is carried on the
+	// job so the worker can attach at the reserved slot.
+	Enqueue(ctx context.Context, id, urlHash, url, postID string, position int) error
 
 	// Claim atomically moves the oldest queued job to running and
 	// returns it. Returns (nil, nil) when the queue is empty — the
