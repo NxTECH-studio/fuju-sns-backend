@@ -2,6 +2,22 @@
 
 A modern SNS (Social Network Service) backend built with Go, following Clean Architecture principles.
 
+## Quick Links
+
+Frontend developers integrating against this backend should read in this
+order:
+
+1. This README (repository overview, local start-up)
+2. [`docs/product-overview.md`](docs/product-overview.md) — product
+   features, user model, ULID identifiers, timeline paging, error envelope
+3. [`docs/swagger.yaml`](docs/swagger.yaml) — OpenAPI 3.0.3 spec (type-
+   generation-ready)
+4. [`docs/authcore-integration.md`](docs/authcore-integration.md) —
+   AuthCore Bearer token flow, `/me` hydrate, admin flag, CORS
+
+Backend maintainers: see [`docs/architecture.md`](docs/architecture.md)
+and [`docs/IMPLEMENTATION_GUIDE.md`](docs/IMPLEMENTATION_GUIDE.md).
+
 ## Features
 
 - **Clean Architecture**: Strict layer separation (Domain, Usecase, Repository, Handler, Middleware)
@@ -166,15 +182,14 @@ make build-prod        # Build production binary
 
 ## Authentication
 
-Clients obtain an access token from AuthCore (out of scope for this
-repository). All API calls include `Authorization: Bearer <token>`.
-The backend introspects the token per request via AuthCore's RFC 7662
-endpoint, with a 30-second in-memory cache keyed on the token. Session
-lifetime and token rotation are owned by AuthCore; this backend never
-sets a `Set-Cookie` header of its own.
+Clients obtain an access token from AuthCore and pass it as
+`Authorization: Bearer <token>` on every FUJU API call. The backend
+validates it per request via RFC 7662 introspection with a 30s
+in-memory cache. No cookies are issued by this service.
 
-See `pkg/authcore/` for the client and cache implementation, and
-`internal/middleware/` for the request-time validation path.
+See [`docs/authcore-integration.md`](docs/authcore-integration.md) for
+the FE-facing flow (token refresh, `/me` hydrate, admin flag, CORS) and
+`pkg/authcore/` + `internal/middleware/` for the backend implementation.
 
 ## Database
 
@@ -184,14 +199,14 @@ See `pkg/authcore/` for the client and cache implementation, and
 # Create database
 createdb fuju
 
-# Run migrations (to be implemented)
-make migrate
+# Apply migrations (PostgreSQL must be running)
+make db-init
 ```
 
 ### Schema
 
 - **users**: SNS-local mirror cache of AuthCore profile + bio / banner / is_admin
-- **posts**: User posts, including replies via `reply_to_post_id`
+- **posts**: User posts, including replies via `parent_post_id`
 - **likes**: Like relationships between users and posts
 - **images**: Uploaded image metadata (Cloudflare R2 storage keys)
 

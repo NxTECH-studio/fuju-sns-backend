@@ -38,10 +38,10 @@ FUJUは、ソーシャルメディアプラットフォーム向けのバック�
 |---|---|---|
 | **言語** | Go | 1.24 |
 | **データベース** | PostgreSQL | 16-Alpine |
-| **キャッシュ** | Redis | 7-Alpine |
+| **キャッシュ** | in-process (`pkg/authcore/cache.go`, TTL=30s) | - |
 | **コンテナ化** | Docker Compose | 3.8 |
 | **ロギング** | structured logging | - |
-| **認証** | AuthCore Introspection | - |
+| **認証** | AuthCore Bearer JWT + RFC 7662 introspection | - |
 | **ストレージ** | Cloudflare R2 | - |
 
 ---
@@ -56,7 +56,7 @@ FUJUは、ソーシャルメディアプラットフォーム向けのバック�
 │              http://localhost:5173                       │
 └─────────────────────────────────────────────────────────┘
                           │
-                 AuthCore session cookie
+             Authorization: Bearer <access_token>
                           │
 ┌─────────────────────────────────────────────────────────┐
 │                Backend API Server                        │
@@ -69,12 +69,12 @@ FUJUは、ソーシャルメディアプラットフォーム向けのバック�
 │  ├── /posts/*                                            │
 │  └── /v1/images/*                                        │
 └─────────────────────────────────────────────────────────┘
-          │           │           │              │
-          ▼           ▼           ▼              ▼
-    ┌───────────┬───────────┬─────────────┬─────────────┐
-    │PostgreSQL │   Redis   │  AuthCore   │ Cloudflare  │
-    │(Port 5432)│(Port 6379)│(introspect) │   R2 API    │
-    └───────────┴───────────┴─────────────┴─────────────┘
+          │                  │                    │
+          ▼                  ▼                    ▼
+    ┌───────────┬─────────────────────┬─────────────────┐
+    │PostgreSQL │  AuthCore (RFC 7662 │   Cloudflare R2 │
+    │(Port 5432)│   introspection)    │       API       │
+    └───────────┴─────────────────────┴─────────────────┘
 ```
 
 ### レイヤー構造
@@ -159,25 +159,10 @@ healthcheck: pg_isready (10秒間隔)
 
 **主要テーブル**:
 - `users` - AuthCore 鏡像 + SNS 固有プロフィール（Bio/Banner、`is_admin`）
-- `posts` - 投稿（`reply_to_post_id` により reply を表現）
+- `posts` - 投稿（`parent_post_id` により reply を表現）
 - `images` - 画像メタデータ
 
-#### 3. Redis Service (`fuju-redis`)
-
-```yaml
-image: redis:7-alpine
-port: 6379
-command: redis-server --appendonly yes
-volumes:
-  - redis_data (永続化)
-healthcheck: PING command (10秒間隔)
-```
-
-**用途**:
-- アプリ内キャッシング
-- 将来: リアルタイム通知、AuthCore Introspection キャッシュの外部化
-
-#### 4. Adminer Service (`fuju-adminer`)
+#### 3. Adminer Service (`fuju-adminer`)
 
 ```yaml
 image: adminer:latest
@@ -190,7 +175,7 @@ port: 8081
 
 すべてのサービスが`fuju-network`内で通信:
 - サービス名で DNS 解決
-- 例: `postgres:5432`, `redis:6379`
+- 例: `postgres:5432`
 
 ### 起動コマンド
 
@@ -216,26 +201,30 @@ docker compose down -v
 ## 認証とセッション管理
 
 認証の真実源は外部の AuthCore サービス。SNS バックエンドは毎リクエスト、
-AuthCore の introspection エンドポイントに Cookie を渡して `sub`（ULID）
-を解決する。ここでは credential 発行・保管・失効を一切行わない。
+クライアントが付けてきた **Bearer JWT access token** を AuthCore の introspection
+エンドポイント (RFC 7662) に送って `sub`（ULID）を解決する。ここでは credential
+発行・保管・失効を一切行わない。
+
+**FE 視点の詳細**は [`docs/authcore-integration.md`](./authcore-integration.md)
+を参照。ここでは実装者視点のみを記載する。
 
 ### AuthCore Introspection フロー
 
 ```
-[Browser]                           [SNS Backend]                    [AuthCore]
-   │ Cookie: authcore_session=...       │                                │
+[Client]                            [SNS Backend]                    [AuthCore]
+   │ Authorization: Bearer <token>      │                                │
    │───────────────────────────────────▶│                                │
    │                                    │ 1. AuthMiddleware              │
-   │                                    │    Cookie を取得               │
+   │                                    │    Authorization ヘッダ取得    │
    │                                    │    30s キャッシュを参照        │
    │                                    │    ↓ (miss 時)                 │
-   │                                    │ POST /internal/introspect      │
-   │                                    │ Authorization: Bearer <svc>    │
+   │                                    │ POST /v1/auth/introspect       │
+   │                                    │ Authorization: Basic <client>  │
    │                                    │───────────────────────────────▶│
    │                                    │                                │
-   │                                    │   { sub, expires_at }          │
+   │                                    │   { active, sub, exp, ... }    │
    │                                    │◀───────────────────────────────│
-   │                                    │ 2. ctx に sub をセット         │
+   │                                    │ 2. ctx に sub / token をセット │
    │                                    │                                │
    │                                    │ 3. HydrateUserMiddleware       │
    │                                    │    users 行を取得              │
@@ -257,31 +246,32 @@ AuthCore の introspection エンドポイントに Cookie を渡して `sub`（
 
 | 層 | 目的 | 頻度 | TTL |
 |---|---|---|---|
-| Introspection | Cookie が有効か / sub は誰か | 毎リクエスト | **30 秒**（in-memory キャッシュ） |
+| Introspection | access token が有効か / sub は誰か | 毎リクエスト | **30 秒**（in-memory キャッシュ、キーは token 値） |
 | Profile Hydration | DisplayName / DisplayID / IconURL の取得 | users 行の lazy create 時 または 1h 経過後 | **1 時間**（`profile_refreshed_at` で管理） |
 
-Introspection は **fail-closed**。AuthCore が不達なら 503、AuthCore が 401/403 を返したら 401。
-Profile Hydration は **fail-open**。失敗時は既存の `*_cached` をそのまま返し、
-`profile_refreshed_at` は更新しない（次回リクエストで再試行）。
+Introspection は **fail-closed**。AuthCore が不達なら 503、AuthCore が `active=false`
+を返したら 401。Profile Hydration は **fail-open**。失敗時は既存の `*_cached`
+をそのまま返し、`profile_refreshed_at` は更新しない（次回リクエストで再試行）。
 
 ### AuthCore クライアント
 
 - `pkg/authcore.Client` インターフェース
-  - `Introspect(ctx, sessionToken) (*Session, error)`
-  - `GetProfile(ctx, sub) (*Profile, error)`
+  - `Introspect(ctx, accessToken) (*Session, error)`
+  - `GetProfile(ctx, accessToken) (*Profile, error)`
 - `pkg/authcore.HTTPClient` が具象実装（`net/http`）
 - `pkg/authcore.IntrospectCache` が上記を 30s TTL でラップ
 - エラー区別: `ErrInvalidSession`（401 扱い） / `ErrUpstream`（503 扱い） / `ErrNotFound`
 
-### Cookie 仕様
+### Bearer トークンの扱い
 
-AuthCore 側で発行される不透明（opaque）セッショントークン。
-SNS バックエンドは Cookie 名 (`AUTHCORE_SESSION_COOKIE_NAME`, default
-`authcore_session`) を設定経由で指定して読むだけで、値の生成・回転・破棄には関与しない。
+- クライアントは `Authorization: Bearer <token>` をすべてのリクエストに付ける。
+- バックエンドは値の生成・回転・破棄には関与しない（AuthCore 側で行う）。
+- トークンそのものはログに出さない（§ セキュリティ考慮事項 9 参照）。
 
 ### ログアウト
 
-AuthCore 側のエンドポイントで行う。SNS バックエンドは専用ルートを持たない。
+AuthCore 側のエンドポイントで行う。SNS バックエンドは専用ルートを持たない
+（Cookie を発行していないため、サーバ側で破棄する対象もない）。
 
 ---
 
@@ -313,7 +303,7 @@ AuthCore 側のエンドポイントで行う。SNS バックエンドは専用�
 認証済みユーザー自身のレコードを返す。行が無ければ lazy-create され、
 `*_cached` フィールドは AuthCore から 1h TTL でハイドレートされる。
 
-**認証**: 必須（AuthCore セッション Cookie）
+**認証**: 必須（AuthCore 発行 Bearer JWT）
 
 **レスポンス** (200 OK):
 ```json
@@ -333,7 +323,7 @@ AuthCore 側のエンドポイントで行う。SNS バックエンドは専用�
 **エラー**:
 | ステータス | 説明 |
 |---|---|
-| 401 Unauthorized | Cookie 欠落 / 無効セッション |
+| 401 Unauthorized | Bearer トークン欠落 / 無効なトークン |
 | 503 Service Unavailable | AuthCore 到達不能（introspection 失敗） |
 
 ---
@@ -413,7 +403,7 @@ sub: AuthCore sub (ULID, 26 文字)
 
 ユーザープロフィール更新
 
-**認証**: 必須（AuthCore セッション Cookie）
+**認証**: 必須（AuthCore 発行 Bearer JWT）
 
 本人のみが自身のプロフィール更新可能。SNS 固有属性（`bio` / `banner_url`）
 のみ更新可能。identity / AuthCore 鏡像フィールドはここからは変更できない。
@@ -448,7 +438,7 @@ sub: AuthCore sub (ULID, 26 文字)
 |---|---|
 | 403 Forbidden | 他ユーザーの更新を試行 |
 | 404 Not Found | ユーザーが見つからない |
-| 401 Unauthorized | Cookie 欠落 / 無効セッション |
+| 401 Unauthorized | Bearer トークン欠落 / 無効なトークン |
 
 ---
 
@@ -493,7 +483,7 @@ user_id: 特定ユーザーの sub に限定（オプション、ULID）
 
 新規投稿作成
 
-**認証**: 必須（AuthCore セッション Cookie）
+**認証**: 必須（AuthCore 発行 Bearer JWT）
 
 **リクエストボディ**:
 ```json
@@ -557,7 +547,7 @@ id: 投稿 ID (ULID)
 
 投稿削除
 
-**認証**: 必須（AuthCore セッション Cookie）
+**認証**: 必須（AuthCore 発行 Bearer JWT）
 
 投稿作成者のみが削除可能。
 
@@ -573,7 +563,7 @@ id: 投稿 ID (ULID)
 |---|---|
 | 403 Forbidden | 他ユーザーの投稿を削除しようとした |
 | 404 Not Found | 投稿が見つからない |
-| 401 Unauthorized | Cookie 欠落 / 無効セッション |
+| 401 Unauthorized | Bearer トークン欠落 / 無効なトークン |
 
 ---
 
@@ -581,7 +571,7 @@ id: 投稿 ID (ULID)
 
 現行 API では reply は投稿そのものとして表現される：
 
-- `POST /posts` に `reply_to_post_id` を指定して返信を作成
+- `POST /posts` に `parent_post_id` を指定して返信を作成
 - `DELETE /posts/{id}` で返信を削除（所有者のみ）
 - `GET /posts/{id}/replies` で直接の返信一覧を取得
 
@@ -597,7 +587,7 @@ ID はすべて ULID 文字列。
 
 画像アップロード
 
-**認証**: 必須（AuthCore セッション Cookie）
+**認証**: 必須（AuthCore 発行 Bearer JWT）
 
 **リクエスト形式**: `multipart/form-data`
 
@@ -632,7 +622,7 @@ description: 画像説明（オプション）
 | 400 Bad Request | ファイルが見つからない |
 | 413 Payload Too Large | ファイルサイズ超過 |
 | 415 Unsupported Media Type | 対応していないファイル形式 |
-| 401 Unauthorized | Cookie 欠落 / 無効セッション |
+| 401 Unauthorized | Bearer トークン欠落 / 無効なトークン |
 | 503 Service Unavailable | R2 サービスに接続できない |
 
 ---
@@ -641,7 +631,7 @@ description: 画像説明（オプション）
 
 ユーザーの画像一覧取得
 
-**認証**: 必須（AuthCore セッション Cookie）
+**認証**: 必須（AuthCore 発行 Bearer JWT）
 
 **クエリパラメータ**:
 ```
@@ -673,7 +663,7 @@ limit: 1 ページあたりの件数（デフォルト: 20）
 
 画像削除
 
-**認証**: 必須（AuthCore セッション Cookie）
+**認証**: 必須（AuthCore 発行 Bearer JWT）
 
 画像の所有者のみが削除可能。
 
@@ -691,7 +681,7 @@ R2 バケットからも削除される。
 |---|---|
 | 403 Forbidden | 他ユーザーの画像を削除しようとした |
 | 404 Not Found | 画像が見つからない |
-| 401 Unauthorized | Cookie 欠落 / 無効セッション |
+| 401 Unauthorized | Bearer トークン欠落 / 無効なトークン |
 
 ---
 
@@ -733,15 +723,16 @@ CORS_ALLOWED_ORIGINS=*
 
 **ファイル**: `internal/middleware/middleware.go`
 
-**機能**: AuthCore セッション Cookie を introspection で検証し、
-`sub`（ULID）をリクエストコンテキストに保存する。
+**機能**: `Authorization: Bearer <token>` を introspection で検証し、
+`sub`（ULID）とアクセストークンをリクエストコンテキストに保存する。
 
 **処理フロー**:
-1. Cookie `authcore_session`（`AUTHCORE_SESSION_COOKIE_NAME` で変更可）を取得
-2. `authcore.Client.Introspect(ctx, cookie.Value)` を呼ぶ
+1. `Authorization` ヘッダから Bearer トークンを取り出す
+2. `authcore.Client.Introspect(ctx, token)` を呼ぶ
    - `IntrospectCache` 経由で 30s 以内の結果はローカルキャッシュを使用
 3. `ErrInvalidSession` → 401、`ErrUpstream` → 503
 4. 成功時は `auth.SetSubInContext(ctx, session.Sub)` で sub を保存
+   （後段の `GetProfile` 呼び出しのためにアクセストークンも context に保持）
 
 **エラーレスポンス** (401 Unauthorized):
 ```json
@@ -1017,30 +1008,34 @@ func WriteErrorResponse(w http.ResponseWriter, err error) {
 
 ## セキュリティ考慮事項
 
-### 1. セッション検証（AuthCore Introspection）
+### 1. トークン検証（AuthCore Introspection）
 
 **検証方法**:
-- Cookie 値を毎リクエスト AuthCore の introspection エンドポイントで検証
-- service-to-service bearer token（`AUTHCORE_SERVICE_TOKEN`）で保護
-- 30s の in-memory キャッシュでスパイクを吸収
+- `Authorization: Bearer <token>` を毎リクエスト AuthCore の introspection
+  エンドポイント (RFC 7662) で検証
+- FUJU は confidential client として Basic 認証（`AUTHCORE_CLIENT_ID` /
+  `AUTHCORE_CLIENT_SECRET`）で introspection を呼ぶ
+- 30s の in-memory キャッシュ（キーは token 値）でスパイクを吸収
 
 **失敗時の挙動**:
-- AuthCore が 401/403 → SNS も 401
+- AuthCore が `active=false` / 401 → SNS も 401
 - AuthCore が到達不能 / 5xx → SNS は 503
-- Cookie 欠落 → 401
+- `Authorization` ヘッダ欠落 → 401
 - 署名・有効期限・revoke 判定はすべて AuthCore 側が行う
 
 ### 2. CSRF 保護
 
-- OAuth / CSRF 用の state トークン発行は AuthCore 側の責務
-- SNS バックエンドは AuthCore が発行した不透明セッション Cookie を
-  そのまま読み、`SameSite` 属性も AuthCore 側で設定される
+- Bearer ヘッダ方式のため、Cookie ベースの CSRF は主要リスクではない
+- AuthCore 側のログインフロー（リダイレクト / code 交換）の CSRF は
+  AuthCore 側が state トークン等で対処する責務
+- SNS バックエンドは Cookie を発行しないため、CSRF トークンの発行・検証は行わない
 
 ### 3. XSS 対策
 
-**Cookie 属性**:
-- AuthCore が `HttpOnly` / `Secure` / `SameSite` を設定する前提
-- SNS バックエンドは Cookie を書き込まない
+**トークン保存先**:
+- FE 側の責務。access token はメモリ保管を推奨（[`docs/authcore-integration.md`](./authcore-integration.md)
+  §8 参照）。
+- SNS バックエンドは Cookie を書き込まない（`Set-Cookie` を返さない）。
 
 **コンテンツの検証**:
 - 投稿コンテンツは HTML エスケープして保存
@@ -1074,29 +1069,24 @@ if post.UserID != sub {
 
 ### 6. レート制限
 
-**将来の実装**: Redis を利用したレート制限
+**現状**: 未実装。`429 Too Many Requests` を返す経路はない。
 
-```go
-// 例：1 分間に 60 リクエストまで
-sub, _ := auth.GetSubFromContext(ctx)
-key := fmt.Sprintf("ratelimit:%s:%d", sub, time.Now().Minute())
-count, _ := redis.Get(ctx, key)
-if count >= 60 {
-  return http.StatusTooManyRequests
-}
-```
+**将来**: 実装時は in-process トークンバケットを第一候補とし、水平スケール
+が必要になった段階で分散ストア（Redis 等）の導入を別タスクで議論する。本
+リポジトリには現時点で該当する依存は入っていない。
 
 ### 7. 認証の委譲
 
 本サービスは credential を一切保持しない。identity / パスワード /
-OAuth プロバイダー連携はすべて AuthCore 側の責務。
+外部 IdP 連携はすべて AuthCore 側の責務。
 
 ### 8. 環境変数の管理
 
 **秘密情報の環境変数化**:
 ```bash
 # .env（ローカル開発用）
-AUTHCORE_SERVICE_TOKEN=your_service_token   # AuthCore から払い出し
+AUTHCORE_CLIENT_ID=your_client_id
+AUTHCORE_CLIENT_SECRET=your_client_secret
 DB_PASSWORD=your_db_password
 R2_SECRET_ACCESS_KEY=your_r2_secret
 ```
@@ -1109,8 +1099,8 @@ R2_SECRET_ACCESS_KEY=your_r2_secret
 
 **機密情報の除外**:
 ```go
-// 悪い：Cookie 値をログ
-log.Info("Auth attempt", "cookie", cookieValue)
+// 悪い：アクセストークンをログ
+log.Info("Auth attempt", "access_token", token)
 
 // 良い：sub のみをログ
 log.Info("Auth attempt", "sub", sub)

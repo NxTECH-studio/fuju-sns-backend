@@ -32,6 +32,7 @@
 | 02 | [02-implement-badge.md](./02-implement-badge.md) | 01 | 確定済み。青=`verified_celebrity`, 金=`developer`（priority=5）, admin 判定は `users.is_admin`, 初回 admin は seed migration（Migration 005）で投入 |
 | 03 | [03-implement-follow-and-timeline.md](./03-implement-follow-and-timeline.md) | 02-post | 確定済み。`users.followers_count` / `following_count` は本タスクの Migration 006 で ALTER |
 | 03 | [03-implement-ogp-fetcher.md](./03-implement-ogp-fetcher.md) | 02-post | 確定済み。キャッシュ TTL=3 日、末尾スラッシュは同一視、enqueue は post commit 後 best-effort |
+| 06 | [06-frontend-handoff-docs-and-dead-code-removal.md](./06-frontend-handoff-docs-and-dead-code-removal.md) | 01-05 | 確定済み。dead code 削除 → swagger 刷新 → FE 向けプロダクト概要 / AuthCore 連携ドキュメント整備。migration 追加なし |
 
 > `04-implement-organization.md` は **廃案・削除済み**（MVP 非対応）。他ドキュメントからも参照を削除済み。
 

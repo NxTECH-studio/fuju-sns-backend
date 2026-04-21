@@ -96,7 +96,7 @@ DB_PASSWORD=fuju_password
 ### Posts Table
 - Stores post content with ULID primary key
 - References author via `user_id` (`users.sub`)
-- Replies are modelled as posts pointing back via `reply_to_post_id`
+- Replies are modelled as posts pointing back via `parent_post_id`
   (there is no separate `comments` table)
 - Tracks `likes_count`; like relationships live in the dedicated
   `likes` table
@@ -105,7 +105,7 @@ DB_PASSWORD=fuju_password
 
 Created for performance optimization:
 - User lookups: `profile_refreshed_at`, `display_id_cached`, `deleted_at`
-- Post queries: `user_id`, `created_at`, `reply_to_post_id`, `deleted_at`
+- Post queries: `user_id`, `created_at`, `parent_post_id`, `deleted_at`
 - Likes: `(user_id, post_id)` unique, `post_id`
 
 ## Backup and Restore
