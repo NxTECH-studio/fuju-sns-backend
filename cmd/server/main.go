@@ -29,6 +29,10 @@ import (
 	"github.com/fuju/backend/pkg/storage"
 )
 
+// Version is the release identifier, overridden at build time via
+// `-ldflags "-X main.Version=..."`. Defaults to "dev" for local builds.
+// BuildTime is the UTC timestamp of the binary's build, also injected
+// via ldflags. "unknown" until set by the release pipeline.
 var (
 	Version   = "dev"
 	BuildTime = "unknown"
