@@ -71,8 +71,19 @@ type postAuthorView struct {
 	IconURLCached     string `json:"icon_url_cached"`
 }
 
+// postOGPView is a single OGP preview card on a post response.
+type postOGPView struct {
+	URL          string `json:"url"`
+	Title        string `json:"title"`
+	Description  string `json:"description"`
+	ImageURL     string `json:"image_url"`
+	SiteName     string `json:"site_name"`
+	CanonicalURL string `json:"canonical_url"`
+}
+
 // postDetailView is the JSON response shape for a single post (with its
-// images, tags, author, and viewer-liked / viewer-following flags).
+// images, tags, author, OGP previews, and viewer-liked /
+// viewer-following flags).
 type postDetailView struct {
 	ID              string          `json:"id"`
 	UserID          string          `json:"user_id"`
@@ -87,6 +98,7 @@ type postDetailView struct {
 	Images          []postImageView `json:"images"`
 	Tags            []postTagView   `json:"tags"`
 	Author          *postAuthorView `json:"author"`
+	OGPPreviews     []postOGPView   `json:"ogp_previews"`
 	LikedByViewer   bool            `json:"liked_by_viewer"`
 	FollowingAuthor bool            `json:"following_author"`
 }
@@ -109,6 +121,17 @@ func toPostDetailView(d *postusecase.PostDetail) postDetailView {
 			IconURLCached:     d.Author.IconURLCached,
 		}
 	}
+	previews := make([]postOGPView, 0, len(d.OGPPreviews))
+	for _, p := range d.OGPPreviews {
+		previews = append(previews, postOGPView{
+			URL:          p.URL,
+			Title:        p.Title,
+			Description:  p.Description,
+			ImageURL:     p.ImageURL,
+			SiteName:     p.SiteName,
+			CanonicalURL: p.CanonicalURL,
+		})
+	}
 	return postDetailView{
 		ID:              d.Post.ID,
 		UserID:          d.Post.UserID,
@@ -123,6 +146,7 @@ func toPostDetailView(d *postusecase.PostDetail) postDetailView {
 		Images:          images,
 		Tags:            tags,
 		Author:          author,
+		OGPPreviews:     previews,
 		LikedByViewer:   d.LikedByViewer,
 		FollowingAuthor: d.FollowingAuthor,
 	}

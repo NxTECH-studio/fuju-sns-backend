@@ -30,7 +30,8 @@ func newPostHandlerFixture(t *testing.T) *PostHandler {
 	likeRepo := inmemory.NewLikeRepository()
 	userRepo := inmemory.NewUserRepository()
 	followRepo := inmemory.NewFollowRepository()
-	hyd := postusecase.NewHydrator(imageRepo, tagRepo, likeRepo, userRepo, followRepo)
+	ogpRepo := inmemory.NewOGPCacheRepository(links)
+	hyd := postusecase.NewHydrator(imageRepo, tagRepo, likeRepo, userRepo, followRepo, ogpRepo)
 
 	ex := tagextractor.NewRegexTagExtractor(nil)
 	create := postusecase.NewCreatePostUseCase(postRepo, imageRepo, tagRepo, ex)

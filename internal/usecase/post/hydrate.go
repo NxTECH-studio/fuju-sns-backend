@@ -9,9 +9,9 @@ import (
 )
 
 // PostDetail bundles a Post with its images, tags, per-viewer liked flag,
-// the author's user row (for display_name / icon_url) and a per-viewer
-// following_author flag. Author / FollowingAuthor are populated by the
-// Hydrator; GetPostUseCase also fills them.
+// the author's user row (for display_name / icon_url), a per-viewer
+// following_author flag, and any attached OGP previews. Author,
+// FollowingAuthor, and OGPPreviews are populated by the Hydrator.
 type PostDetail struct {
 	Post            *domain.Post
 	Images          []*domain.Image
@@ -19,18 +19,20 @@ type PostDetail struct {
 	LikedByViewer   bool
 	Author          *domain.User
 	FollowingAuthor bool
+	OGPPreviews     []*domain.OGPPreview
 }
 
-// Hydrator batches the image / tag / like / author / follow lookups
-// needed to produce PostDetail slices from a list of Post. It is shared
-// by the post list endpoints and the timeline endpoints so the N+1
-// avoidance strategy lives in one place.
+// Hydrator batches the image / tag / like / author / follow / OGP
+// lookups needed to produce PostDetail slices from a list of Post. It
+// is shared by the post list endpoints and the timeline endpoints so
+// the N+1 avoidance strategy lives in one place.
 type Hydrator struct {
 	imageRepo  repository.ImageRepository
 	tagRepo    repository.TagRepository
 	likeRepo   repository.LikeRepository
 	userRepo   repository.UserRepository
 	followRepo repository.FollowRepository
+	ogpRepo    repository.OGPCacheRepository
 }
 
 // NewHydrator constructs a Hydrator. All repos are required.
@@ -40,6 +42,7 @@ func NewHydrator(
 	likeRepo repository.LikeRepository,
 	userRepo repository.UserRepository,
 	followRepo repository.FollowRepository,
+	ogpRepo repository.OGPCacheRepository,
 ) *Hydrator {
 	return &Hydrator{
 		imageRepo:  imageRepo,
@@ -47,6 +50,7 @@ func NewHydrator(
 		likeRepo:   likeRepo,
 		userRepo:   userRepo,
 		followRepo: followRepo,
+		ogpRepo:    ogpRepo,
 	}
 }
 
@@ -80,6 +84,10 @@ func (h *Hydrator) Hydrate(ctx context.Context, posts []*domain.Post, viewerSub 
 	if err != nil {
 		return nil, errors.DatabaseError("failed to load authors", err)
 	}
+	ogpByPost, err := h.ogpRepo.ListByPostIDs(ctx, postIDs)
+	if err != nil {
+		return nil, errors.DatabaseError("failed to load ogp", err)
+	}
 
 	var likedByMe map[string]bool
 	var followingByMe map[string]bool
@@ -103,9 +111,26 @@ func (h *Hydrator) Hydrate(ctx context.Context, posts []*domain.Post, viewerSub 
 			LikedByViewer:   likedByMe[p.ID],
 			Author:          authorsBySub[p.UserID],
 			FollowingAuthor: followingByMe[p.UserID],
+			OGPPreviews:     filterOKPreviews(ogpByPost[p.ID]),
 		}
 	}
 	return out, nil
+}
+
+// filterOKPreviews drops cached rows whose Status is not ok. Error rows
+// live in the cache to short-circuit re-fetches but should never render
+// a card on a post.
+func filterOKPreviews(in []*domain.OGPPreview) []*domain.OGPPreview {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]*domain.OGPPreview, 0, len(in))
+	for _, p := range in {
+		if p.Status == domain.OGPStatusOK {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // HydrateOne is a convenience wrapper for endpoints that fetched exactly

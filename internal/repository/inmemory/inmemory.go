@@ -198,15 +198,23 @@ func (r *UserRepository) Delete(_ context.Context, sub string) error {
 	return nil
 }
 
-// LinkStore backs many-to-many relationships (post_images, post_tags) that
-// cross repository boundaries in the in-memory driver. The SQL model keeps
-// each relation in its own table; in-memory we share a single
-// mutex-guarded struct so PostRepository can attach links during Create
-// and ImageRepository / TagRepository can read them back.
+// LinkStore backs many-to-many relationships (post_images, post_tags,
+// post_ogp) that cross repository boundaries in the in-memory driver.
+// The SQL model keeps each relation in its own table; in-memory we
+// share a single mutex-guarded struct so PostRepository can attach
+// links during Create and ImageRepository / TagRepository / OGPCache
+// can read them back.
 type LinkStore struct {
 	mu         sync.RWMutex
 	postImages map[string][]string            // post_id -> ordered image ids
 	postTags   map[string]map[string]struct{} // post_id -> set of tag ids
+	postOGPs   map[string][]postOGPLink       // post_id -> ordered OGP links
+}
+
+// postOGPLink mirrors a post_ogp row.
+type postOGPLink struct {
+	URLHash  string
+	Position int
 }
 
 // NewLinkStore constructs an empty LinkStore.
@@ -214,7 +222,40 @@ func NewLinkStore() *LinkStore {
 	return &LinkStore{
 		postImages: make(map[string][]string),
 		postTags:   make(map[string]map[string]struct{}),
+		postOGPs:   make(map[string][]postOGPLink),
 	}
+}
+
+// attachOGP idempotently associates url_hash with post at position. A
+// re-attach with the same urlHash is a no-op; attaching a different
+// urlHash at the same position is ignored (first writer wins, matches
+// the SQL UNIQUE(post_id, position) semantics).
+func (s *LinkStore) attachOGP(postID, urlHash string, position int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, l := range s.postOGPs[postID] {
+		if l.URLHash == urlHash || l.Position == position {
+			return
+		}
+	}
+	s.postOGPs[postID] = append(s.postOGPs[postID], postOGPLink{URLHash: urlHash, Position: position})
+	sort.Slice(s.postOGPs[postID], func(i, j int) bool {
+		return s.postOGPs[postID][i].Position < s.postOGPs[postID][j].Position
+	})
+}
+
+// ogpLinksByPost returns the ordered list of (url_hash, position) pairs
+// attached to postID.
+func (s *LinkStore) ogpLinksByPost(postID string) []postOGPLink {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	src := s.postOGPs[postID]
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]postOGPLink, len(src))
+	copy(out, src)
+	return out
 }
 
 func (s *LinkStore) attachImages(postID string, imageIDs []string) {
@@ -451,6 +492,13 @@ func (r *PostRepository) DecrementLikesCount(_ context.Context, postID string) e
 	if p, ok := r.posts[postID]; ok && p.DeletedAt == nil && p.LikesCount > 0 {
 		p.LikesCount--
 	}
+	return nil
+}
+
+// AttachOGP idempotently associates url_hash with post at position.
+// The underlying LinkStore handles dedup.
+func (r *PostRepository) AttachOGP(_ context.Context, postID, urlHash string, position int) error {
+	r.links.attachOGP(postID, urlHash, position)
 	return nil
 }
 
@@ -1158,4 +1206,164 @@ func decodeFollowCursor(cursor *string) (time.Time, string, bool) {
 // callers that need to build a cursor from a known (time, peer) pair.
 func EncodeFollowCursor(t time.Time, peer string) string {
 	return encodeFollowCursor(t, peer)
+}
+
+// OGPCacheRepository is an in-memory implementation of
+// OGPCacheRepository. The LinkStore supplies the post→url_hash join so
+// ListByPostIDs can hydrate previews without walking the full cache.
+type OGPCacheRepository struct {
+	mu    sync.RWMutex
+	rows  map[string]*domain.OGPPreview // url_hash -> row
+	links *LinkStore
+}
+
+// NewOGPCacheRepository creates an empty cache backed by links.
+func NewOGPCacheRepository(links *LinkStore) repository.OGPCacheRepository {
+	return &OGPCacheRepository{
+		rows:  make(map[string]*domain.OGPPreview),
+		links: links,
+	}
+}
+
+// Get returns a copy of the cached row, or (nil, nil) on miss.
+func (r *OGPCacheRepository) Get(_ context.Context, urlHash string) (*domain.OGPPreview, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	row, ok := r.rows[urlHash]
+	if !ok {
+		return nil, nil
+	}
+	cp := *row
+	return &cp, nil
+}
+
+// Upsert stores a deep copy so later mutations by the caller don't
+// leak into the store.
+func (r *OGPCacheRepository) Upsert(_ context.Context, preview *domain.OGPPreview) error {
+	if preview == nil || preview.URLHash == "" {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cp := *preview
+	r.rows[preview.URLHash] = &cp
+	return nil
+}
+
+// ListByPostIDs walks each post's post_ogp links and returns the full
+// preview rows grouped by post ID, ordered by position ascending.
+func (r *OGPCacheRepository) ListByPostIDs(_ context.Context, postIDs []string) (map[string][]*domain.OGPPreview, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make(map[string][]*domain.OGPPreview, len(postIDs))
+	for _, pid := range postIDs {
+		links := r.links.ogpLinksByPost(pid)
+		if len(links) == 0 {
+			continue
+		}
+		previews := make([]*domain.OGPPreview, 0, len(links))
+		for _, l := range links {
+			row, ok := r.rows[l.URLHash]
+			if !ok {
+				continue
+			}
+			cp := *row
+			previews = append(previews, &cp)
+		}
+		if len(previews) > 0 {
+			out[pid] = previews
+		}
+	}
+	return out, nil
+}
+
+// OGPJobQueue is an in-memory implementation of OGPJobQueue. MVP-only;
+// single-process workers. Claim picks the oldest queued job under the
+// exclusive lock to mirror SQL's SELECT ... FOR UPDATE SKIP LOCKED
+// semantics without multi-process contention.
+type OGPJobQueue struct {
+	mu   sync.Mutex
+	jobs map[string]*domain.OGPJob // id -> job
+}
+
+// NewOGPJobQueue creates an empty in-memory job queue.
+func NewOGPJobQueue() repository.OGPJobQueue {
+	return &OGPJobQueue{jobs: make(map[string]*domain.OGPJob)}
+}
+
+// Enqueue adds a queued job. Duplicate ids are rejected silently; the
+// caller owns id generation so this is only defensive.
+func (q *OGPJobQueue) Enqueue(_ context.Context, id, urlHash, url, postID string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if _, exists := q.jobs[id]; exists {
+		return nil
+	}
+	q.jobs[id] = &domain.OGPJob{
+		ID:         id,
+		URLHash:    urlHash,
+		URL:        url,
+		PostID:     postID,
+		EnqueuedAt: time.Now(),
+		Status:     domain.OGPJobQueued,
+	}
+	return nil
+}
+
+// Claim returns the oldest queued job, transitioning it to running.
+// Returns (nil, nil) when the queue is empty.
+func (q *OGPJobQueue) Claim(_ context.Context, _ string) (*domain.OGPJob, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	var oldest *domain.OGPJob
+	for _, j := range q.jobs {
+		if j.Status != domain.OGPJobQueued {
+			continue
+		}
+		if oldest == nil || j.EnqueuedAt.Before(oldest.EnqueuedAt) {
+			oldest = j
+		}
+	}
+	if oldest == nil {
+		return nil, nil
+	}
+	now := time.Now()
+	oldest.Status = domain.OGPJobRunning
+	oldest.StartedAt = &now
+	oldest.Attempts++
+	cp := *oldest
+	return &cp, nil
+}
+
+// MarkDone transitions a running job to done.
+func (q *OGPJobQueue) MarkDone(_ context.Context, jobID string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if j, ok := q.jobs[jobID]; ok {
+		now := time.Now()
+		j.Status = domain.OGPJobDone
+		j.FinishedAt = &now
+	}
+	return nil
+}
+
+// MarkFailed either requeues the job (retriable=true) or finalizes it
+// as failed. The last error string is preserved for debugging.
+func (q *OGPJobQueue) MarkFailed(_ context.Context, jobID, reason string, retriable bool) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	j, ok := q.jobs[jobID]
+	if !ok {
+		return nil
+	}
+	j.LastError = reason
+	if retriable {
+		j.Status = domain.OGPJobQueued
+		j.StartedAt = nil
+		return nil
+	}
+	now := time.Now()
+	j.Status = domain.OGPJobFailed
+	j.FinishedAt = &now
+	return nil
 }
