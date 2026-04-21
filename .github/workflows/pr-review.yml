@@ -186,28 +186,72 @@ jobs:
 
       - name: Check commit message format
         id: commit-format
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
-          # Get the first commit message
-          COMMIT_MSG=$(git log --format="%B" origin/main..HEAD 2>/dev/null | head -1)
+          set -e
+          # Ensure the base ref is fetched; fail loud if it cannot be resolved.
+          git fetch origin "${BASE_REF}" --depth=0 || git fetch origin "${BASE_REF}"
 
-          if [ -z "$COMMIT_MSG" ]; then
-            echo "invalid=false" >> $GITHUB_OUTPUT
-          elif ! echo "$COMMIT_MSG" | grep -E "^(feat|fix|docs|test|refactor|chore|add|ci)(\(.+\))?:" >/dev/null 2>&1; then
-            echo "invalid=true" >> $GITHUB_OUTPUT
+          # Enumerate subject lines for each commit in the PR range, one per line.
+          # %s is the subject (first line only), so we do not have to deal with %B bodies.
+          mapfile -t SUBJECTS < <(git log --format=%s "origin/${BASE_REF}..HEAD")
+
+          if [ "${#SUBJECTS[@]}" -eq 0 ]; then
+            echo "No commits in PR range; skipping format check"
+            echo "invalid=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          PATTERN='^(feat|fix|docs|test|refactor|chore|add|ci|perf|style|build)(\([^)]+\))?(!)?: .+'
+          BAD=()
+          for subject in "${SUBJECTS[@]}"; do
+            if ! printf '%s' "$subject" | grep -Eq "$PATTERN"; then
+              BAD+=("$subject")
+            fi
+          done
+
+          if [ "${#BAD[@]}" -gt 0 ]; then
+            {
+              echo "invalid=true"
+              echo "bad_subjects<<EOF"
+              printf '%s\n' "${BAD[@]}"
+              echo "EOF"
+            } >> "$GITHUB_OUTPUT"
           else
-            echo "invalid=false" >> $GITHUB_OUTPUT
+            echo "invalid=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Comment on commit format
         if: steps.commit-format.outputs.invalid == 'true'
         uses: actions/github-script@v7
+        env:
+          BAD_SUBJECTS: ${{ steps.commit-format.outputs.bad_subjects }}
         with:
           script: |
+            const bad = process.env.BAD_SUBJECTS || '';
+            const list = bad.split('\n').filter(Boolean).map(s => `- \`${s}\``).join('\n');
+            const body = [
+              '### ❌ コミットメッセージ形式のエラー',
+              '',
+              'Conventional Commits 形式に従ってください：',
+              '```',
+              'type(scope): 説明',
+              '',
+              'Body（オプション）',
+              'Footer（オプション）',
+              '```',
+              '',
+              'Types: `feat`, `fix`, `docs`, `test`, `refactor`, `chore`, `add`, `ci`, `perf`, `style`, `build`',
+              '',
+              '**違反コミット:**',
+              list || '(不明)',
+            ].join('\n');
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
-              body: `### ❌ コミットメッセージ形式のエラー\n\nConventional Commits 形式に従ってください：\n\`\`\`\ntype(scope): 説明\n\nBody（オプション）\nFooter（オプション）\n\`\`\`\n\nTypes: \\\`feat\\\`, \\\`fix\\\`, \\\`docs\\\`, \\\`test\\\`, \\\`refactor\\\`, \\\`chore\\\`, \\\`add\\\``
+              body,
             });
 
   notify-review:
