@@ -20,12 +20,15 @@ import (
 // only the fields they need — backends that do not yet implement a
 // repo leave the field nil.
 type Contract struct {
-	Users   repository.UserRepository
-	Posts   repository.PostRepository
-	Likes   repository.LikeRepository
-	Follows repository.FollowRepository
-	Tags    repository.TagRepository
-	Badges  repository.BadgeRepository
+	Users    repository.UserRepository
+	Posts    repository.PostRepository
+	Likes    repository.LikeRepository
+	Follows  repository.FollowRepository
+	Tags     repository.TagRepository
+	Badges   repository.BadgeRepository
+	Images   repository.ImageRepository
+	OGPCache repository.OGPCacheRepository
+	OGPJobs  repository.OGPJobQueue
 }
 
 // Factory is a fresh-state constructor: each subtest calls it to get
