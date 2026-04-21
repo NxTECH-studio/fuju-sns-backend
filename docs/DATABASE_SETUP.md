@@ -75,7 +75,16 @@ PGPASSWORD="fuju_password" psql -h localhost -U fuju_user -d fuju < db/migration
 
 ## Environment Variables
 
-Required environment variables for database connection:
+Repository backend selection:
+
+```bash
+# Explicit override (optional). Unset → auto-select by ENVIRONMENT:
+#   "development" → inmemory; anything else → postgres.
+REPO_BACKEND=inmemory   # or "postgres"
+```
+
+Connection fields (required when `REPO_BACKEND=postgres` and
+`DATABASE_URL` is unset):
 
 ```bash
 DB_HOST=localhost
@@ -84,6 +93,49 @@ DB_NAME=fuju
 DB_USER=fuju_user
 DB_PASSWORD=fuju_password
 ```
+
+Optional overrides:
+
+```bash
+# Full DSN; wins over DB_*. Use for managed providers that pass
+# sslmode / pool params in the URL (postgres://.../db?sslmode=require).
+DATABASE_URL=
+
+# Pool sizing (pgx defaults apply when empty).
+DB_MAX_CONNS=
+DB_MIN_CONNS=
+```
+
+## Running the Server
+
+```bash
+# In-memory (no Postgres required, volatile):
+go run ./cmd/server
+
+# Postgres-backed (requires db-up + db-init):
+docker-compose up -d
+./db/init.sh
+REPO_BACKEND=postgres go run ./cmd/server
+```
+
+When `REPO_BACKEND` is unset the server picks inmemory for
+`ENVIRONMENT=development` and postgres otherwise, so staging /
+production containers pick up the persistent backend without extra
+wiring.
+
+## Integration Tests
+
+The postgres repository implementations are exercised via build-tagged
+contract tests that need a live Postgres:
+
+```bash
+docker-compose up -d
+./db/init.sh
+make test-integration
+```
+
+CI runs the same tests against a service-container Postgres; see the
+`test` job in `.github/workflows/ci.yml`.
 
 ## Database Schema
 

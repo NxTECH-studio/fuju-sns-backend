@@ -13,7 +13,6 @@ import (
 	"github.com/fuju/backend/config"
 	"github.com/fuju/backend/internal/handler"
 	"github.com/fuju/backend/internal/middleware"
-	"github.com/fuju/backend/internal/repository/inmemory"
 	"github.com/fuju/backend/internal/tagextractor"
 	adminusecase "github.com/fuju/backend/internal/usecase/admin"
 	badgeusecase "github.com/fuju/backend/internal/usecase/badge"
@@ -55,18 +54,25 @@ func main() {
 		"environment", cfg.Environment,
 	)
 
-	// Repositories (in-memory for now). The LinkStore backs the
-	// post_images / post_tags cross-repo relations.
-	links := inmemory.NewLinkStore()
-	userRepo := inmemory.NewUserRepository()
-	postRepo := inmemory.NewPostRepository(links)
-	imageRepo := inmemory.NewImageRepository(links)
-	tagRepo := inmemory.NewTagRepository(links)
-	likeRepo := inmemory.NewLikeRepository()
-	badgeRepo := inmemory.NewBadgeRepository()
-	followRepo := inmemory.NewFollowRepository()
-	ogpCacheRepo := inmemory.NewOGPCacheRepository(links)
-	ogpJobQueue := inmemory.NewOGPJobQueue()
+	// Repositories: the concrete backend (inmemory vs postgres) is
+	// selected by config.RepoBackend(). The cleanup hook closes the
+	// pgxpool on shutdown for the postgres backend.
+	repos, cleanupRepos, err := newRepositorySet(ctx, cfg, log)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to initialize repositories: %v\n", err)
+		os.Exit(1)
+	}
+	defer cleanupRepos()
+
+	userRepo := repos.Users
+	postRepo := repos.Posts
+	imageRepo := repos.Images
+	tagRepo := repos.Tags
+	likeRepo := repos.Likes
+	badgeRepo := repos.Badges
+	followRepo := repos.Follows
+	ogpCacheRepo := repos.OGPCache
+	ogpJobQueue := repos.OGPJobs
 
 	// AuthCore client + short-lived introspection cache.
 	authcoreClient := authcore.New(authcore.Options{

@@ -95,6 +95,19 @@ jobs:
                   DB_USER: fuju
                   DB_PASSWORD: testpass
 
+            - name: Apply database migrations
+              run: |
+                  for m in db/migrations/*.sql; do
+                    echo "Applying $(basename "$m")"
+                    PGPASSWORD=testpass psql -h localhost -U fuju -d fuju_test -v ON_ERROR_STOP=1 -f "$m"
+                  done
+
+            - name: Run integration tests (postgres)
+              run: go test -tags=integration -race ./internal/repository/postgres/...
+              env:
+                  DATABASE_URL: postgres://fuju:testpass@localhost:5432/fuju_test?sslmode=disable
+                  REPO_BACKEND: postgres
+
             - name: Upload coverage to Codecov
               uses: codecov/codecov-action@v3
               with:

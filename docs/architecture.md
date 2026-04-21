@@ -50,7 +50,23 @@ FUJU Backend is a SNS (Social Network Service) backend built in Go following Cle
 2. **Repository Layer** (`internal/repository/`)
    - Data persistence abstraction
    - Database queries and transactions
-   - Implements interfaces defined in domain
+   - Implements interfaces defined alongside the entities they persist
+     (`internal/repository/repository.go` is the single source of
+     truth for every contract)
+   - Two backends live side-by-side:
+     - `internal/repository/inmemory/` — fast, volatile, used by unit
+       tests and local `go run ./cmd/server` in `ENVIRONMENT=development`
+     - `internal/repository/postgres/` — pgx/v5 against the schema in
+       `db/migrations/`; used in staging / production and by CI
+       integration tests
+   - Backend selection is driven by `REPO_BACKEND` (explicit) or
+     `ENVIRONMENT` (auto); see `cmd/server/repos.go`
+   - `internal/repository/testsupport/` holds contract tests that run
+     against **both** backends — if a future repository change
+     diverges between in-memory and postgres, the shared contract
+     suite fails on at least one side. Cursor encoders that must be
+     byte-identical across backends live in
+     `internal/repository/sharedcursor/`
    - Examples: `UserRepository`, `PostRepository`
 
 3. **Usecase Layer** (`internal/usecase/`)
@@ -96,8 +112,11 @@ backend/
 │   │       ├── get_post.go
 │   │       └── list_posts.go
 │   ├── repository/
-│   │   ├── user_repository.go         # PostgreSQL implementation
-│   │   └── post_repository.go
+│   │   ├── repository.go              # Interface contracts
+│   │   ├── inmemory/                  # Map-backed impls for unit tests / dev
+│   │   ├── postgres/                  # pgx/v5 impls for staging / prod
+│   │   ├── testsupport/               # Contract tests shared by both
+│   │   └── sharedcursor/              # Cross-backend cursor encoder
 │   ├── handler/
 │   │   ├── user_handler.go
 │   │   ├── post_handler.go
@@ -110,9 +129,8 @@ backend/
 │       └── recovery.go                # Panic recovery
 ├── pkg/
 │   ├── db/
-│   │   ├── connection.go              # PostgreSQL connection pool
-│   │   ├── transaction.go             # Transaction management
-│   │   └── migration.go               # Database migrations
+│   │   ├── pgx.go                     # pgxpool wrapper (NewPool / Ping)
+│   │   └── tx.go                      # WithTx helper
 │   ├── logger/
 │   │   ├── logger.go                  # Structured JSON logging
 │   │   └── context.go                 # Context-aware logging
