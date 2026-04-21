@@ -41,7 +41,11 @@ func newFixture(t *testing.T, tags []string) *postFixture {
 	imageRepo := inmemory.NewImageRepository(links)
 	tagRepo := inmemory.NewTagRepository(links)
 	likeRepo := inmemory.NewLikeRepository()
+	userRepo := inmemory.NewUserRepository()
+	followRepo := inmemory.NewFollowRepository()
+	ogpRepo := inmemory.NewOGPCacheRepository(links)
 	extractor := &fakeExtractor{tags: tags}
+	hyd := NewHydrator(imageRepo, tagRepo, likeRepo, userRepo, followRepo, ogpRepo)
 	return &postFixture{
 		links:     links,
 		postRepo:  postRepo,
@@ -50,7 +54,7 @@ func newFixture(t *testing.T, tags []string) *postFixture {
 		likeRepo:  likeRepo,
 		create:    NewCreatePostUseCase(postRepo, imageRepo, tagRepo, extractor),
 		del:       NewDeletePostUseCase(postRepo),
-		list:      NewListPostsUseCase(postRepo, imageRepo, tagRepo, likeRepo),
+		list:      NewListPostsUseCase(postRepo, hyd),
 		like:      NewLikePostUseCase(postRepo, likeRepo),
 		unlike:    NewUnlikePostUseCase(postRepo, likeRepo),
 	}

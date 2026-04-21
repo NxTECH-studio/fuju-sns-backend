@@ -21,6 +21,12 @@ type User struct {
 
 	IsAdmin bool
 
+	// Denormalized counters maintained by the follow usecases. SQL stores
+	// them on the users row; a background reconciliation job (future work)
+	// would reset drift.
+	FollowersCount int64
+	FollowingCount int64
+
 	CreatedAt time.Time
 	UpdatedAt time.Time
 	DeletedAt *time.Time

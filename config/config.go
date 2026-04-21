@@ -43,6 +43,9 @@ type Config struct {
 
 	// Frontend
 	FrontendURL string
+
+	// OGP fetcher
+	OGPUserAgent string
 }
 
 // Load loads configuration from environment variables.
@@ -68,6 +71,7 @@ func Load() (*Config, error) {
 		LogLevel:                   getEnv("LOG_LEVEL", "info"),
 		CORSAllowedOrigins:         getEnv("CORS_ALLOWED_ORIGINS", "*"),
 		FrontendURL:                getEnv("FRONTEND_URL", ""),
+		OGPUserAgent:               getEnv("OGP_USER_AGENT", "FujuBot/1.0 (+https://fuju.example.com/bot)"),
 	}
 
 	if err := cfg.Validate(); err != nil {
