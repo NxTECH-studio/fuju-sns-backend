@@ -149,15 +149,33 @@ it treats every request as anonymous until AuthCore tells it otherwise. The
 `users` table is a mirror keyed by AuthCore's `sub` (ULID) plus a small set
 of SNS-owned fields (`bio`, `banner_url`, `is_admin`).
 
+### Middleware chain (current `cmd/server/main.go`)
+
+Authenticated routes pass through, in order:
+
+1. `AuthMiddleware(cachedAuthCore)` — introspects the Bearer token and
+   sets `sub` + the raw access token onto the request context.
+2. `HydrateUserMiddleware(userHydrateUC)` — resolves `sub` to
+   `*domain.User`, lazy-creating or TTL-refreshing via AuthCore
+   `GetProfile` as needed.
+3. (Admin-only routes) `AdminMiddleware()` — rejects non-admin callers
+   with 403.
+
+The global stack wrapping `mux` is (outermost first): context timeout
+(30s) -> request logging -> panic recovery -> CORS.
+
 ### Request flow
 
-1. The browser holds an opaque session cookie issued by AuthCore
-   (`AUTHCORE_SESSION_COOKIE_NAME`, default `authcore_session`).
-2. `AuthMiddleware` reads the cookie and calls AuthCore's introspection
-   endpoint (`POST {AUTHCORE_BASE_URL}{AUTHCORE_INTROSPECT_PATH}`) with a
-   service bearer token to resolve the `sub` and expiry.
+1. The client sends `Authorization: Bearer <access_token>` — an
+   AuthCore-issued access token. No session cookie is involved; this
+   service does not write `Set-Cookie`.
+2. `AuthMiddleware` extracts the Bearer value and calls AuthCore's
+   introspection endpoint
+   (`POST {AUTHCORE_BASE_URL}{AUTHCORE_INTROSPECT_PATH}`) as an
+   HTTP Basic-authenticated confidential client (`AUTHCORE_CLIENT_ID` /
+   `AUTHCORE_CLIENT_SECRET`) to resolve `sub` and expiry.
 3. Results are held in an in-memory cache (`AUTHCORE_INTROSPECT_CACHE_TTL`,
-   default 30s) keyed on the cookie value so AuthCore is not hit on every
+   default 30s) keyed on the token value so AuthCore is not hit on every
    API call.
 4. `HydrateUserMiddleware` looks up the `users` row for `sub`. If missing,
    the row is lazy-created from `GetProfile`. If older than
@@ -170,14 +188,14 @@ of SNS-owned fields (`bio`, `banner_url`, `is_admin`).
 
 | Layer | Purpose | Frequency | TTL |
 |---|---|---|---|
-| Introspection | Is the cookie valid? Who is `sub`? | Every authenticated request | 30s in-memory cache |
+| Introspection | Is the access token active? Who is `sub`? | Every authenticated request | 30s in-memory cache |
 | Profile hydration | Pull DisplayName / DisplayID / IconURL | On lazy-create or when the mirror row is older than 1h | 1h (tracked via `profile_refreshed_at`) |
 
 ### Failure modes
 
-- **Introspection**: fail-closed. An unreachable AuthCore returns 503; a
-  401/403 returns 401. A fresh (≤30s) cache entry absorbs short upstream
-  blips.
+- **Introspection**: fail-closed. An unreachable AuthCore returns 503;
+  an `active=false` response returns 401. A fresh (<=30s) cache entry
+  absorbs short upstream blips.
 - **Profile hydration**: fail-open. On error the existing `*_cached` fields
   are returned and `profile_refreshed_at` is left stale so the next request
   retries. The first hydrate after lazy-create may insert blank cached
@@ -286,8 +304,9 @@ https://api.fuju.local/v1
 ```
 
 Authentication is handled by AuthCore; this backend exposes no
-`/auth/*` endpoints. Authenticated requests carry AuthCore's session
-cookie, which the middleware introspects on every call.
+`/auth/*` endpoints. Authenticated requests carry an AuthCore-issued
+access token in the `Authorization: Bearer <token>` header, which the
+middleware introspects on every call.
 
 ### Me Endpoint
 
@@ -353,9 +372,8 @@ type AppError struct {
    - Constraint violations
 
 2. **Authentication Errors** (401 Unauthorized)
-   - Invalid token
-   - Session expired
-   - Missing credentials
+   - Missing `Authorization` header
+   - AuthCore introspection returned `active=false` (expired or revoked token)
 
 3. **Authorization Errors** (403 Forbidden)
    - Insufficient permissions
@@ -400,7 +418,7 @@ Example log:
 - Error rate by type
 - Database query performance
 - Cache hit ratio
-- Session/token expiration rates
+- Access token expiration rates (from AuthCore introspection responses)
 
 ---
 
@@ -450,9 +468,10 @@ Example:
 ```
 feat: Add AuthCore introspection middleware
 
-Validates the AuthCore session cookie on every authenticated request
-and attaches the resolved sub to the request context. Results are
-memoised in a 30s in-memory cache.
+Validates the AuthCore-issued Bearer access token on every
+authenticated request and attaches the resolved sub to the request
+context. Results are memoised in a 30s in-memory cache keyed on the
+token value.
 
 Closes #123
 ```
