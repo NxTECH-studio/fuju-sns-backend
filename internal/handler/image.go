@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/fuju/backend/internal/domain"
 	imageusecase "github.com/fuju/backend/internal/usecase/image"
@@ -12,6 +13,45 @@ import (
 	"github.com/fuju/backend/pkg/errors"
 	"github.com/fuju/backend/pkg/response"
 )
+
+// publicImageView is the JSON shape returned by image endpoints. It
+// exists so the on-wire keys match the rest of the API (snake_case)
+// instead of leaking Go's PascalCase field names from domain.Image.
+type publicImageView struct {
+	ID         string     `json:"id"`
+	StorageKey string     `json:"storage_key"`
+	FileName   string     `json:"file_name"`
+	MimeType   string     `json:"mime_type"`
+	FileSize   int64      `json:"file_size"`
+	PublicURL  string     `json:"public_url"`
+	UserID     string     `json:"user_id"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	DeletedAt  *time.Time `json:"deleted_at,omitempty"`
+}
+
+func toPublicImageView(img *domain.Image) publicImageView {
+	return publicImageView{
+		ID:         img.ID,
+		StorageKey: img.StorageKey,
+		FileName:   img.FileName,
+		MimeType:   img.MimeType,
+		FileSize:   img.FileSize,
+		PublicURL:  img.PublicURL,
+		UserID:     img.UserID,
+		CreatedAt:  img.CreatedAt,
+		UpdatedAt:  img.UpdatedAt,
+		DeletedAt:  img.DeletedAt,
+	}
+}
+
+func toPublicImageViews(images []*domain.Image) []publicImageView {
+	out := make([]publicImageView, 0, len(images))
+	for _, img := range images {
+		out = append(out, toPublicImageView(img))
+	}
+	return out
+}
 
 // Image upload limits.
 const (
@@ -109,7 +149,7 @@ func (h *ImageHandler) UploadImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	WriteSuccessResponse(w, uploadedImage, http.StatusCreated)
+	WriteSuccessResponse(w, toPublicImageView(uploadedImage), http.StatusCreated)
 }
 
 // GetUserImages handles GET /v1/images.
@@ -127,7 +167,7 @@ func (h *ImageHandler) GetUserImages(w http.ResponseWriter, r *http.Request) {
 	}
 
 	listResp := &response.ListResponse{
-		Data:   images,
+		Data:   toPublicImageViews(images),
 		Limit:  100,
 		Offset: 0,
 		Total:  len(images),
