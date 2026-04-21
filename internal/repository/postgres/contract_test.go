@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fuju/backend/internal/domain"
 	"github.com/fuju/backend/internal/repository/postgres"
 	"github.com/fuju/backend/internal/repository/testsupport"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -61,11 +62,13 @@ func truncateAll(t *testing.T) {
 			post_tags,
 			post_images,
 			ogp_jobs,
+			ogp_cache,
 			posts,
 			follows,
 			user_badges,
 			badges,
 			tags,
+			images,
 			users
 		CASCADE`)
 	if err != nil {
@@ -80,12 +83,15 @@ func truncateAll(t *testing.T) {
 func newContract(t *testing.T) testsupport.Contract {
 	truncateAll(t)
 	return testsupport.Contract{
-		Users:   postgres.NewUserRepository(integrationPool),
-		Posts:   postgres.NewPostRepository(integrationPool),
-		Likes:   postgres.NewLikeRepository(integrationPool),
-		Follows: postgres.NewFollowRepository(integrationPool),
-		Tags:    postgres.NewTagRepository(integrationPool),
-		Badges:  postgres.NewBadgeRepository(integrationPool),
+		Users:    postgres.NewUserRepository(integrationPool),
+		Posts:    postgres.NewPostRepository(integrationPool),
+		Likes:    postgres.NewLikeRepository(integrationPool),
+		Follows:  postgres.NewFollowRepository(integrationPool),
+		Tags:     postgres.NewTagRepository(integrationPool),
+		Badges:   postgres.NewBadgeRepository(integrationPool),
+		Images:   postgres.NewImageRepository(integrationPool),
+		OGPCache: postgres.NewOGPCacheRepository(integrationPool),
+		OGPJobs:  postgres.NewOGPJobQueue(integrationPool),
 	}
 }
 
@@ -111,6 +117,82 @@ func TestTagRepository_Contract_Postgres(t *testing.T) {
 
 func TestBadgeRepository_Contract_Postgres(t *testing.T) {
 	testsupport.RunBadgeRepositoryContract(t, newContract)
+}
+
+func TestImageRepository_Contract_Postgres(t *testing.T) {
+	testsupport.RunImageRepositoryContract(t, newContract)
+}
+
+func TestOGPCacheRepository_Contract_Postgres(t *testing.T) {
+	testsupport.RunOGPCacheRepositoryContract(t, newContract)
+}
+
+func TestOGPJobQueue_Contract_Postgres(t *testing.T) {
+	testsupport.RunOGPJobQueueContract(t, newContract)
+}
+
+// TestOGPJobQueue_ConcurrentClaim_Postgres verifies the
+// `FOR UPDATE SKIP LOCKED` invariant: two workers racing on Claim
+// must always see distinct jobs. This property is inherent to the
+// postgres implementation (inmemory serializes under a mutex) and
+// cannot be exercised by the backend-agnostic contract runner.
+func TestOGPJobQueue_ConcurrentClaim_Postgres(t *testing.T) {
+	c := newContract(t)
+	ctx := context.Background()
+
+	// Seed a user + post + two queued jobs.
+	if _, err := c.Users.Upsert(ctx, testUser("01HAAAAAAAAAAAAAAAAAAAAAAA")); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	if _, err := c.Posts.Create(ctx, testPost("01HPAAAAAAAAAAAAAAAAAAAAAA", "01HAAAAAAAAAAAAAAAAAAAAAAA"), nil, nil); err != nil {
+		t.Fatalf("seed post: %v", err)
+	}
+	ids := []string{
+		"01HJOBAAAAAAAAAAAAAAAAAAAA",
+		"01HJOBBBBBBBBBBBBBBBBBBBBB",
+	}
+	for _, id := range ids {
+		if err := c.OGPJobs.Enqueue(ctx, id,
+			"00000000000000000000000000000000000000000000000000000000000abcd0",
+			"https://example.com/"+id,
+			"01HPAAAAAAAAAAAAAAAAAAAAAA", 0); err != nil {
+			t.Fatalf("enqueue %s: %v", id, err)
+		}
+	}
+
+	// Launch two concurrent claim goroutines.
+	type result struct {
+		job *domain.OGPJob
+		err error
+	}
+	results := make(chan result, 2)
+	start := make(chan struct{})
+	for i := 0; i < 2; i++ {
+		go func() {
+			<-start
+			j, err := c.OGPJobs.Claim(ctx, "worker")
+			results <- result{j, err}
+		}()
+	}
+	close(start)
+
+	seen := make(map[string]bool)
+	for i := 0; i < 2; i++ {
+		r := <-results
+		if r.err != nil {
+			t.Fatalf("claim: %v", r.err)
+		}
+		if r.job == nil {
+			t.Fatalf("expected a job, got nil")
+		}
+		if seen[r.job.ID] {
+			t.Fatalf("SKIP LOCKED invariant violated: job %s claimed twice", r.job.ID)
+		}
+		seen[r.job.ID] = true
+	}
+	if len(seen) != 2 {
+		t.Errorf("expected 2 distinct jobs claimed, got %d", len(seen))
+	}
 }
 
 // TestAttachOGP_Postgres covers PostRepository.AttachOGP in isolation

@@ -13,12 +13,15 @@ import (
 func newContract(_ *testing.T) testsupport.Contract {
 	links := inmemory.NewLinkStore()
 	return testsupport.Contract{
-		Users:   inmemory.NewUserRepository(),
-		Posts:   inmemory.NewPostRepository(links),
-		Likes:   inmemory.NewLikeRepository(),
-		Follows: inmemory.NewFollowRepository(),
-		Tags:    inmemory.NewTagRepository(links),
-		Badges:  inmemory.NewBadgeRepository(),
+		Users:    inmemory.NewUserRepository(),
+		Posts:    inmemory.NewPostRepository(links),
+		Likes:    inmemory.NewLikeRepository(),
+		Follows:  inmemory.NewFollowRepository(),
+		Tags:     inmemory.NewTagRepository(links),
+		Badges:   inmemory.NewBadgeRepository(),
+		Images:   inmemory.NewImageRepository(links),
+		OGPCache: inmemory.NewOGPCacheRepository(links),
+		OGPJobs:  inmemory.NewOGPJobQueue(),
 	}
 }
 
@@ -44,4 +47,16 @@ func TestTagRepository_Contract(t *testing.T) {
 
 func TestBadgeRepository_Contract(t *testing.T) {
 	testsupport.RunBadgeRepositoryContract(t, newContract)
+}
+
+func TestImageRepository_Contract(t *testing.T) {
+	testsupport.RunImageRepositoryContract(t, newContract)
+}
+
+func TestOGPCacheRepository_Contract(t *testing.T) {
+	testsupport.RunOGPCacheRepositoryContract(t, newContract)
+}
+
+func TestOGPJobQueue_Contract(t *testing.T) {
+	testsupport.RunOGPJobQueueContract(t, newContract)
 }
