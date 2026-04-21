@@ -20,9 +20,15 @@ import (
 // only the fields they need — backends that do not yet implement a
 // repo leave the field nil.
 type Contract struct {
-	Users repository.UserRepository
-	Posts repository.PostRepository
-	Likes repository.LikeRepository
+	Users    repository.UserRepository
+	Posts    repository.PostRepository
+	Likes    repository.LikeRepository
+	Follows  repository.FollowRepository
+	Tags     repository.TagRepository
+	Badges   repository.BadgeRepository
+	Images   repository.ImageRepository
+	OGPCache repository.OGPCacheRepository
+	OGPJobs  repository.OGPJobQueue
 }
 
 // Factory is a fresh-state constructor: each subtest calls it to get
@@ -691,6 +697,529 @@ func RunLikeRepositoryContract(t *testing.T, newContract Factory) {
 		}
 		if len(got) != 2 || !got[postA] || !got[postC] || got[postB] {
 			t.Fatalf("unexpected result: %+v", got)
+		}
+	})
+}
+
+// RunFollowRepositoryContract exercises FollowRepository. On postgres,
+// follows has an FK to users(sub), so Users must be populated in the
+// Contract bundle.
+func RunFollowRepositoryContract(t *testing.T, newContract Factory) {
+	t.Helper()
+
+	t.Run("Create_then_Delete_idempotent_bools", func(t *testing.T) {
+		c := newContract(t)
+		seedUser(t, c.Users, userA)
+		seedUser(t, c.Users, userB)
+
+		ok, err := c.Follows.Create(context.Background(), userA, userB)
+		if err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		if !ok {
+			t.Fatalf("expected true on first create")
+		}
+		// Duplicate — no state change.
+		ok, err = c.Follows.Create(context.Background(), userA, userB)
+		if err != nil {
+			t.Fatalf("create dup: %v", err)
+		}
+		if ok {
+			t.Fatalf("expected false on duplicate create")
+		}
+
+		ok, err = c.Follows.Delete(context.Background(), userA, userB)
+		if err != nil {
+			t.Fatalf("delete: %v", err)
+		}
+		if !ok {
+			t.Fatalf("expected true on delete")
+		}
+		ok, err = c.Follows.Delete(context.Background(), userA, userB)
+		if err != nil {
+			t.Fatalf("delete missing: %v", err)
+		}
+		if ok {
+			t.Fatalf("expected false on delete-of-missing")
+		}
+	})
+
+	t.Run("IsFollowing_reflects_state", func(t *testing.T) {
+		c := newContract(t)
+		seedUser(t, c.Users, userA)
+		seedUser(t, c.Users, userB)
+
+		is, err := c.Follows.IsFollowing(context.Background(), userA, userB)
+		if err != nil {
+			t.Fatalf("is following miss: %v", err)
+		}
+		if is {
+			t.Fatalf("expected false before create")
+		}
+		if _, err := c.Follows.Create(context.Background(), userA, userB); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		is, err = c.Follows.IsFollowing(context.Background(), userA, userB)
+		if err != nil {
+			t.Fatalf("is following hit: %v", err)
+		}
+		if !is {
+			t.Fatalf("expected true after create")
+		}
+	})
+
+	t.Run("ListFollowingSubs_returns_everyone_follower_follows", func(t *testing.T) {
+		c := newContract(t)
+		seedUser(t, c.Users, userA)
+		seedUser(t, c.Users, userB)
+		seedUser(t, c.Users, userC)
+
+		if _, err := c.Follows.Create(context.Background(), userA, userB); err != nil {
+			t.Fatalf("create A->B: %v", err)
+		}
+		if _, err := c.Follows.Create(context.Background(), userA, userC); err != nil {
+			t.Fatalf("create A->C: %v", err)
+		}
+
+		got, err := c.Follows.ListFollowingSubs(context.Background(), userA)
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		want := map[string]bool{userB: true, userC: true}
+		if len(got) != 2 {
+			t.Fatalf("expected 2, got %d (%+v)", len(got), got)
+		}
+		for _, s := range got {
+			if !want[s] {
+				t.Errorf("unexpected sub %s", s)
+			}
+		}
+	})
+
+	t.Run("ListFollowers_cursor_paginates_desc", func(t *testing.T) {
+		c := newContract(t)
+		seedUser(t, c.Users, userA)
+		seedUser(t, c.Users, userB)
+		seedUser(t, c.Users, userC)
+
+		// Three followers of userA, created in sequence so each has a
+		// distinct created_at — postgres NOW() resolves to a monotonic
+		// wall time, inmemory uses time.Now() per Create call.
+		for _, sub := range []string{userB, userC} {
+			if _, err := c.Follows.Create(context.Background(), sub, userA); err != nil {
+				t.Fatalf("create %s->%s: %v", sub, userA, err)
+			}
+			// Postgres TIMESTAMPTZ is microsecond-precision, so in
+			// principle 1µs gaps would suffice, but some CI runners
+			// quantize wall-clock to the syscall timer. 10ms leaves
+			// plenty of headroom while still keeping the suite fast.
+			time.Sleep(10 * time.Millisecond)
+		}
+
+		page, next, err := c.Follows.ListFollowers(context.Background(), userA, nil, 1)
+		if err != nil {
+			t.Fatalf("page 1: %v", err)
+		}
+		if len(page) != 1 {
+			t.Fatalf("expected page size 1, got %d", len(page))
+		}
+		// Newest first: userC (last seeded).
+		if page[0].FollowerSub != userC {
+			t.Fatalf("expected userC first, got %s", page[0].FollowerSub)
+		}
+		if next == "" {
+			t.Fatalf("expected cursor for next page")
+		}
+
+		page2, next2, err := c.Follows.ListFollowers(context.Background(), userA, &next, 5)
+		if err != nil {
+			t.Fatalf("page 2: %v", err)
+		}
+		if len(page2) != 1 || page2[0].FollowerSub != userB {
+			t.Fatalf("expected [userB], got %+v", page2)
+		}
+		if next2 != "" {
+			t.Fatalf("expected empty cursor at end, got %q", next2)
+		}
+	})
+
+	t.Run("ListFollowing_cursor_paginates_desc", func(t *testing.T) {
+		c := newContract(t)
+		seedUser(t, c.Users, userA)
+		seedUser(t, c.Users, userB)
+		seedUser(t, c.Users, userC)
+
+		for _, sub := range []string{userB, userC} {
+			if _, err := c.Follows.Create(context.Background(), userA, sub); err != nil {
+				t.Fatalf("create A->%s: %v", sub, err)
+			}
+			// Postgres TIMESTAMPTZ is microsecond-precision, so in
+			// principle 1µs gaps would suffice, but some CI runners
+			// quantize wall-clock to the syscall timer. 10ms leaves
+			// plenty of headroom while still keeping the suite fast.
+			time.Sleep(10 * time.Millisecond)
+		}
+
+		page, next, err := c.Follows.ListFollowing(context.Background(), userA, nil, 1)
+		if err != nil {
+			t.Fatalf("page 1: %v", err)
+		}
+		if len(page) != 1 || page[0].FolloweeSub != userC {
+			t.Fatalf("expected [userC], got %+v", page)
+		}
+		if next == "" {
+			t.Fatalf("expected cursor for next page")
+		}
+
+		page2, _, err := c.Follows.ListFollowing(context.Background(), userA, &next, 5)
+		if err != nil {
+			t.Fatalf("page 2: %v", err)
+		}
+		if len(page2) != 1 || page2[0].FolloweeSub != userB {
+			t.Fatalf("expected [userB], got %+v", page2)
+		}
+	})
+
+	t.Run("AreFollowing_batches_only_hits", func(t *testing.T) {
+		c := newContract(t)
+		seedUser(t, c.Users, userA)
+		seedUser(t, c.Users, userB)
+		seedUser(t, c.Users, userC)
+
+		if _, err := c.Follows.Create(context.Background(), userA, userB); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+
+		got, err := c.Follows.AreFollowing(context.Background(), userA, []string{userB, userC})
+		if err != nil {
+			t.Fatalf("are following: %v", err)
+		}
+		if len(got) != 1 || !got[userB] || got[userC] {
+			t.Fatalf("unexpected result: %+v", got)
+		}
+	})
+}
+
+// RunTagRepositoryContract exercises TagRepository. Uses posts +
+// post_tags as fixtures for ListByPost* paths, so Users and Posts must
+// be populated in the Contract bundle.
+func RunTagRepositoryContract(t *testing.T, newContract Factory) {
+	t.Helper()
+
+	t.Run("UpsertByNames_dedup_and_persist", func(t *testing.T) {
+		c := newContract(t)
+
+		first, err := c.Tags.UpsertByNames(context.Background(), []string{"golang", "postgres", "golang", ""})
+		if err != nil {
+			t.Fatalf("upsert 1: %v", err)
+		}
+		if len(first) != 2 {
+			t.Fatalf("expected 2 unique tags, got %d (%+v)", len(first), first)
+		}
+		if first[0].Name != "golang" || first[1].Name != "postgres" {
+			t.Fatalf("expected order preserved (golang, postgres), got %q, %q", first[0].Name, first[1].Name)
+		}
+
+		// Second call with overlapping names returns the same IDs.
+		second, err := c.Tags.UpsertByNames(context.Background(), []string{"postgres", "rust"})
+		if err != nil {
+			t.Fatalf("upsert 2: %v", err)
+		}
+		if len(second) != 2 {
+			t.Fatalf("expected 2, got %d", len(second))
+		}
+		if second[0].ID != first[1].ID {
+			t.Errorf("expected postgres ID stable: want %s got %s", first[1].ID, second[0].ID)
+		}
+	})
+
+	t.Run("ListByPostID_returns_alphabetical", func(t *testing.T) {
+		c := newContract(t)
+		seedUser(t, c.Users, userA)
+
+		tags, err := c.Tags.UpsertByNames(context.Background(), []string{"zebra", "alpha", "mango"})
+		if err != nil {
+			t.Fatalf("upsert: %v", err)
+		}
+		var tagIDs []string
+		for _, t := range tags {
+			tagIDs = append(tagIDs, t.ID)
+		}
+		if _, err := c.Posts.Create(context.Background(), &domain.Post{ID: postA, UserID: userA, Content: "x", Visibility: "public"}, nil, tagIDs); err != nil {
+			t.Fatalf("create post: %v", err)
+		}
+
+		got, err := c.Tags.ListByPostID(context.Background(), postA)
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(got) != 3 {
+			t.Fatalf("expected 3 tags, got %d", len(got))
+		}
+		if got[0].Name != "alpha" || got[1].Name != "mango" || got[2].Name != "zebra" {
+			t.Fatalf("expected alphabetical order, got %q / %q / %q", got[0].Name, got[1].Name, got[2].Name)
+		}
+	})
+
+	t.Run("ListByPostIDs_groups_and_skips_bare_posts", func(t *testing.T) {
+		c := newContract(t)
+		seedUser(t, c.Users, userA)
+
+		aTags, err := c.Tags.UpsertByNames(context.Background(), []string{"alpha"})
+		if err != nil {
+			t.Fatalf("upsert A: %v", err)
+		}
+		bTags, err := c.Tags.UpsertByNames(context.Background(), []string{"beta", "gamma"})
+		if err != nil {
+			t.Fatalf("upsert B: %v", err)
+		}
+		if _, err := c.Posts.Create(context.Background(), &domain.Post{ID: postA, UserID: userA, Content: "a", Visibility: "public"}, nil, []string{aTags[0].ID}); err != nil {
+			t.Fatalf("post A: %v", err)
+		}
+		if _, err := c.Posts.Create(context.Background(), &domain.Post{ID: postB, UserID: userA, Content: "b", Visibility: "public"}, nil, []string{bTags[0].ID, bTags[1].ID}); err != nil {
+			t.Fatalf("post B: %v", err)
+		}
+		// postC has no tags.
+		if _, err := c.Posts.Create(context.Background(), &domain.Post{ID: postC, UserID: userA, Content: "c", Visibility: "public"}, nil, nil); err != nil {
+			t.Fatalf("post C: %v", err)
+		}
+
+		got, err := c.Tags.ListByPostIDs(context.Background(), []string{postA, postB, postC})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("expected 2 entries (C absent), got %d (%+v)", len(got), got)
+		}
+		if len(got[postA]) != 1 || got[postA][0].Name != "alpha" {
+			t.Errorf("postA tags wrong: %+v", got[postA])
+		}
+		if len(got[postB]) != 2 || got[postB][0].Name != "beta" || got[postB][1].Name != "gamma" {
+			t.Errorf("postB tags wrong: %+v", got[postB])
+		}
+	})
+}
+
+// RunBadgeRepositoryContract exercises BadgeRepository. user_badges
+// has an FK to users(sub) and badges(id), so Users must be populated.
+func RunBadgeRepositoryContract(t *testing.T, newContract Factory) {
+	t.Helper()
+
+	devID := "01HBADGE0000000000000000DEV"
+	verID := "01HBADGE000000000000000VER0"
+
+	seedBadge := func(t *testing.T, c Contract, id, key, label string, priority int32) *domain.Badge {
+		t.Helper()
+		b, err := c.Badges.Create(context.Background(), &domain.Badge{
+			ID:       id,
+			Key:      key,
+			Label:    label,
+			Priority: priority,
+		})
+		if err != nil {
+			t.Fatalf("seed badge %s: %v", key, err)
+		}
+		if b == nil {
+			t.Fatalf("seed badge %s returned nil", key)
+		}
+		return b
+	}
+
+	t.Run("Create_duplicate_key_returns_nil_and_preserves_original", func(t *testing.T) {
+		c := newContract(t)
+		original := seedBadge(t, c, devID, "developer", "dev", 5)
+
+		// Same key, fresh id → conflict on unique(key).
+		dup, err := c.Badges.Create(context.Background(), &domain.Badge{
+			ID:       verID,
+			Key:      "developer",
+			Label:    "imposter",
+			Priority: 1,
+		})
+		if err != nil {
+			t.Fatalf("create dup: %v", err)
+		}
+		if dup != nil {
+			t.Fatalf("expected nil on duplicate key, got %+v", dup)
+		}
+
+		// First-writer-wins: the original row must be untouched
+		// (label / priority must not have been silently overwritten).
+		survived, err := c.Badges.GetByKey(context.Background(), "developer")
+		if err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if survived == nil {
+			t.Fatalf("original row disappeared")
+		}
+		if survived.ID != original.ID || survived.Label != "dev" || survived.Priority != 5 {
+			t.Errorf("dup overwrote original: %+v", survived)
+		}
+	})
+
+	t.Run("GetByKey_GetByID_ListAll_priority_order", func(t *testing.T) {
+		c := newContract(t)
+		seedBadge(t, c, devID, "developer", "dev", 5)
+		seedBadge(t, c, verID, "verified", "ver", 10)
+
+		byKey, err := c.Badges.GetByKey(context.Background(), "developer")
+		if err != nil {
+			t.Fatalf("get by key: %v", err)
+		}
+		if byKey == nil || byKey.ID != devID {
+			t.Fatalf("unexpected: %+v", byKey)
+		}
+
+		byID, err := c.Badges.GetByID(context.Background(), verID)
+		if err != nil {
+			t.Fatalf("get by id: %v", err)
+		}
+		if byID == nil || byID.Key != "verified" {
+			t.Fatalf("unexpected: %+v", byID)
+		}
+
+		all, err := c.Badges.ListAll(context.Background())
+		if err != nil {
+			t.Fatalf("list all: %v", err)
+		}
+		if len(all) != 2 || all[0].Key != "developer" || all[1].Key != "verified" {
+			t.Fatalf("expected priority-asc [developer, verified], got %+v", all)
+		}
+	})
+
+	t.Run("Update_mutates_mutable_fields", func(t *testing.T) {
+		c := newContract(t)
+		seedBadge(t, c, devID, "developer", "dev", 5)
+
+		out, err := c.Badges.Update(context.Background(), &domain.Badge{
+			ID:          devID,
+			Label:       "Developer",
+			Description: "updated",
+			IconURL:     "https://cdn/dev.png",
+			Color:       "gold",
+			Priority:    3,
+		})
+		if err != nil {
+			t.Fatalf("update: %v", err)
+		}
+		if out == nil || out.Label != "Developer" || out.Priority != 3 {
+			t.Fatalf("unexpected: %+v", out)
+		}
+	})
+
+	t.Run("Update_missing_returns_nil", func(t *testing.T) {
+		c := newContract(t)
+		out, err := c.Badges.Update(context.Background(), &domain.Badge{ID: missingID, Label: "x"})
+		if err != nil {
+			t.Fatalf("update missing: %v", err)
+		}
+		if out != nil {
+			t.Fatalf("expected nil, got %+v", out)
+		}
+	})
+
+	t.Run("Grant_Revoke_and_active_grant_filtering", func(t *testing.T) {
+		c := newContract(t)
+		seedUser(t, c.Users, userA)
+		seedUser(t, c.Users, userB)
+		dev := seedBadge(t, c, devID, "developer", "dev", 5)
+		ver := seedBadge(t, c, verID, "verified", "ver", 10)
+
+		if err := c.Badges.Grant(context.Background(), userA, dev.ID, userA, nil, ""); err != nil {
+			t.Fatalf("grant dev: %v", err)
+		}
+		if err := c.Badges.Grant(context.Background(), userA, ver.ID, userA, nil, ""); err != nil {
+			t.Fatalf("grant ver: %v", err)
+		}
+		// Expired grant — should be filtered.
+		expired := time.Now().Add(-time.Hour)
+		if err := c.Badges.Grant(context.Background(), userB, ver.ID, userA, &expired, ""); err != nil {
+			t.Fatalf("grant expired: %v", err)
+		}
+
+		active, err := c.Badges.ListByUserID(context.Background(), userA)
+		if err != nil {
+			t.Fatalf("list userA: %v", err)
+		}
+		if len(active) != 2 || active[0].Key != "developer" || active[1].Key != "verified" {
+			t.Fatalf("expected [developer, verified], got %+v", active)
+		}
+
+		expiredList, err := c.Badges.ListByUserID(context.Background(), userB)
+		if err != nil {
+			t.Fatalf("list userB: %v", err)
+		}
+		if len(expiredList) != 0 {
+			t.Fatalf("expected empty (expired filtered), got %+v", expiredList)
+		}
+
+		// Revoke dev; only verified remains.
+		if err := c.Badges.Revoke(context.Background(), userA, dev.ID); err != nil {
+			t.Fatalf("revoke: %v", err)
+		}
+		after, err := c.Badges.ListByUserID(context.Background(), userA)
+		if err != nil {
+			t.Fatalf("list after revoke: %v", err)
+		}
+		if len(after) != 1 || after[0].Key != "verified" {
+			t.Fatalf("expected [verified], got %+v", after)
+		}
+	})
+
+	t.Run("Grant_regrant_overwrites_expires_at_reason", func(t *testing.T) {
+		c := newContract(t)
+		seedUser(t, c.Users, userA)
+		dev := seedBadge(t, c, devID, "developer", "dev", 5)
+
+		future := time.Now().Add(time.Hour)
+		if err := c.Badges.Grant(context.Background(), userA, dev.ID, userA, &future, "first"); err != nil {
+			t.Fatalf("grant: %v", err)
+		}
+		if err := c.Badges.Grant(context.Background(), userA, dev.ID, userA, nil, "second"); err != nil {
+			t.Fatalf("regrant: %v", err)
+		}
+
+		// Active list should include the regrant (expires_at = NULL
+		// means "no expiry" — always active).
+		got, err := c.Badges.ListByUserID(context.Background(), userA)
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("expected 1 badge, got %d", len(got))
+		}
+	})
+
+	t.Run("ListByUserIDs_batches_and_drops_no_grants", func(t *testing.T) {
+		c := newContract(t)
+		seedUser(t, c.Users, userA)
+		seedUser(t, c.Users, userB)
+		seedUser(t, c.Users, userC)
+		dev := seedBadge(t, c, devID, "developer", "dev", 5)
+		ver := seedBadge(t, c, verID, "verified", "ver", 10)
+
+		if err := c.Badges.Grant(context.Background(), userA, dev.ID, userA, nil, ""); err != nil {
+			t.Fatalf("grant A-dev: %v", err)
+		}
+		if err := c.Badges.Grant(context.Background(), userA, ver.ID, userA, nil, ""); err != nil {
+			t.Fatalf("grant A-ver: %v", err)
+		}
+		if err := c.Badges.Grant(context.Background(), userB, ver.ID, userA, nil, ""); err != nil {
+			t.Fatalf("grant B-ver: %v", err)
+		}
+
+		got, err := c.Badges.ListByUserIDs(context.Background(), []string{userA, userB, userC})
+		if err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("expected 2 entries (userC absent), got %d (%+v)", len(got), got)
+		}
+		if len(got[userA]) != 2 || got[userA][0].Key != "developer" {
+			t.Errorf("userA wrong: %+v", got[userA])
+		}
+		if len(got[userB]) != 1 || got[userB][0].Key != "verified" {
+			t.Errorf("userB wrong: %+v", got[userB])
 		}
 	})
 }
