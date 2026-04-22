@@ -5,6 +5,7 @@ package auth
 
 import (
 	"context"
+	"time"
 
 	"github.com/fuju/backend/internal/domain"
 )
@@ -14,6 +15,7 @@ type contextKey string
 const (
 	subKey         contextKey = "authcore_sub"
 	accessTokenKey contextKey = "authcore_access_token"
+	expiresAtKey   contextKey = "authcore_expires_at"
 	currentUserKey contextKey = "authcore_current_user"
 )
 
@@ -44,6 +46,25 @@ func GetAccessTokenFromContext(ctx context.Context) (string, bool) {
 		return "", false
 	}
 	return tok, true
+}
+
+// SetExpiresAtInContext stores the access token's `exp` claim so that
+// downstream handlers (e.g. SessionHandler) can align the Set-Cookie
+// Max-Age with the token lifetime without calling AuthCore a second
+// time. A zero time encodes "AuthCore did not return exp".
+func SetExpiresAtInContext(ctx context.Context, t time.Time) context.Context {
+	return context.WithValue(ctx, expiresAtKey, t)
+}
+
+// GetExpiresAtFromContext returns the access token's `exp` time.
+// The bool is false when no value was stored or when the stored time
+// is the zero value; callers should fall back to a configured default.
+func GetExpiresAtFromContext(ctx context.Context) (time.Time, bool) {
+	t, ok := ctx.Value(expiresAtKey).(time.Time)
+	if !ok || t.IsZero() {
+		return time.Time{}, false
+	}
+	return t, true
 }
 
 // SetCurrentUserInContext stores the hydrated User on the context so
