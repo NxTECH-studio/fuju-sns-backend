@@ -9,9 +9,11 @@ import (
 	"github.com/fuju/backend/pkg/auth"
 )
 
-func newIssueRequest(token string, exp time.Time) *http.Request {
+const testAccessToken = "at-abc"
+
+func newIssueRequest(exp time.Time) *http.Request {
 	r := httptest.NewRequest(http.MethodPost, "/v1/auth/session", nil)
-	ctx := auth.SetAccessTokenInContext(r.Context(), token)
+	ctx := auth.SetAccessTokenInContext(r.Context(), testAccessToken)
 	if !exp.IsZero() {
 		ctx = auth.SetExpiresAtInContext(ctx, exp)
 	}
@@ -33,7 +35,7 @@ func TestSessionHandler_Issue_setsCookieFromContext(t *testing.T) {
 	rec := httptest.NewRecorder()
 	exp := time.Now().Add(30 * time.Minute)
 
-	h.Issue(rec, newIssueRequest("at-abc", exp))
+	h.Issue(rec, newIssueRequest(exp))
 
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d", rec.Code)
@@ -71,7 +73,7 @@ func TestSessionHandler_Issue_usesFallbackWhenExpAbsent(t *testing.T) {
 	h := NewSessionHandler(cfg)
 
 	rec := httptest.NewRecorder()
-	h.Issue(rec, newIssueRequest("at-abc", time.Time{}))
+	h.Issue(rec, newIssueRequest(time.Time{}))
 
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d", rec.Code)
@@ -91,7 +93,7 @@ func TestSessionHandler_Issue_fallsBackOnSubSecondRemaining(t *testing.T) {
 	h := NewSessionHandler(cfg)
 
 	rec := httptest.NewRecorder()
-	h.Issue(rec, newIssueRequest("at-abc", time.Now().Add(500*time.Millisecond)))
+	h.Issue(rec, newIssueRequest(time.Now().Add(500*time.Millisecond)))
 
 	got := rec.Result().Cookies()[0].MaxAge
 	if got != 300 {
@@ -108,7 +110,7 @@ func TestSessionHandler_Issue_usesFallbackWhenExpAlreadyPassed(t *testing.T) {
 	h := NewSessionHandler(cfg)
 
 	rec := httptest.NewRecorder()
-	h.Issue(rec, newIssueRequest("at-abc", time.Now().Add(-time.Hour)))
+	h.Issue(rec, newIssueRequest(time.Now().Add(-time.Hour)))
 
 	got := rec.Result().Cookies()[0].MaxAge
 	if got != 600 {

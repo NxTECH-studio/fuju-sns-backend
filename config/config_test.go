@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+const sameSiteNone = "None"
+
 func base() *Config {
 	return &Config{
 		Environment:                 "development",
@@ -41,7 +43,7 @@ func TestValidate_rejectsNoneWithoutSecure(t *testing.T) {
 	// Browsers silently drop SameSite=None cookies that lack Secure,
 	// so we must fail boot rather than wait for runtime symptoms.
 	c := base()
-	c.SessionCookieSameSite = "None"
+	c.SessionCookieSameSite = sameSiteNone
 	c.SessionCookieSecure = false
 	if err := c.Validate(); err == nil {
 		t.Fatalf("expected SameSite=None + Secure=false to be rejected")
@@ -50,7 +52,7 @@ func TestValidate_rejectsNoneWithoutSecure(t *testing.T) {
 
 func TestValidate_acceptsNoneWithSecure(t *testing.T) {
 	c := base()
-	c.SessionCookieSameSite = "None"
+	c.SessionCookieSameSite = sameSiteNone
 	c.SessionCookieSecure = true
 	if err := c.Validate(); err != nil {
 		t.Fatalf("SameSite=None + Secure=true must pass, got %v", err)
@@ -96,12 +98,12 @@ func TestValidate_cachesParsedSameSite(t *testing.T) {
 	}{
 		{"Lax", http.SameSiteLaxMode},
 		{"Strict", http.SameSiteStrictMode},
-		{"None", http.SameSiteNoneMode},
+		{sameSiteNone, http.SameSiteNoneMode},
 	}
 	for _, tc := range cases {
 		c := base()
 		c.SessionCookieSameSite = tc.in
-		if tc.in == "None" {
+		if tc.in == sameSiteNone {
 			c.SessionCookieSecure = true
 		}
 		if err := c.Validate(); err != nil {
