@@ -65,15 +65,33 @@ func LoggingMiddleware(log *logger.Logger) func(http.Handler) http.Handler {
 	}
 }
 
-// AuthMiddleware extracts the Bearer access token from the Authorization
-// header, introspects it via AuthCore, and stores both the resolved sub and
-// the raw access token on the context (the token is needed later to call
-// AuthCore's profile endpoint). Fail-closed: an invalid token is 401; an
-// upstream outage is 503.
-func AuthMiddleware(client authcore.Client) func(http.Handler) http.Handler {
+// AuthMiddlewareConfig configures AuthMiddleware's token sources. The
+// zero value is safe when only the Authorization header is used; a
+// non-empty CookieName opts the middleware into Cookie fallback for
+// browsers that use the POST /v1/auth/session handoff.
+type AuthMiddlewareConfig struct {
+	// CookieName is the HttpOnly cookie that carries the access token
+	// (e.g. "fuju_access"). Empty disables the cookie path — useful
+	// for deployments that only accept Bearer.
+	CookieName string
+}
+
+// AuthMiddleware extracts the AuthCore access token from the request,
+// introspects it via AuthCore, and stores the resolved sub, the raw
+// access token, and the token expiry on the context. The token is
+// sourced in priority order:
+//
+//  1. Authorization: Bearer <token> header
+//  2. Cookie named cfg.CookieName (set by POST /v1/auth/session)
+//
+// Explicit beats implicit: if both are present the header wins so
+// callers who know what they want (CLIs / mobile / backend-to-backend)
+// can always override a stale Cookie. Fail-closed: missing / invalid
+// token is 401, AuthCore outage is 503.
+func AuthMiddleware(client authcore.Client, cfg AuthMiddlewareConfig) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			token, ok := extractBearerToken(r.Header.Get("Authorization"))
+			token, ok := extractAuthToken(r, cfg.CookieName)
 			if !ok {
 				writeAuthError(w, http.StatusUnauthorized, errors.ErrUnauthorized, "authentication required")
 				return
@@ -91,9 +109,27 @@ func AuthMiddleware(client authcore.Client) func(http.Handler) http.Handler {
 
 			ctx := auth.SetSubInContext(r.Context(), session.Sub)
 			ctx = auth.SetAccessTokenInContext(ctx, token)
+			ctx = auth.SetExpiresAtInContext(ctx, session.ExpiresAt)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// extractAuthToken returns the access token to introspect plus a bool
+// indicating whether any source yielded a non-empty token. Header
+// wins over cookie when both are present.
+func extractAuthToken(r *http.Request, cookieName string) (string, bool) {
+	if token, ok := extractBearerToken(r.Header.Get("Authorization")); ok {
+		return token, true
+	}
+	if cookieName == "" {
+		return "", false
+	}
+	c, err := r.Cookie(cookieName)
+	if err != nil || c.Value == "" {
+		return "", false
+	}
+	return c.Value, true
 }
 
 // extractBearerToken parses an `Authorization: Bearer <token>` header.
@@ -178,6 +214,13 @@ func RecoveryMiddleware(log *logger.Logger) func(http.Handler) http.Handler {
 }
 
 // CORSMiddleware adds CORS headers based on allowed origins.
+//
+// Note on the Cookie handoff flow: `Access-Control-Allow-Credentials:
+// true` is only emitted on the explicit-origin path. Browsers reject
+// the combination `Allow-Origin: *` + `Allow-Credentials: true`, so
+// deployments that issue the `fuju_access` cookie MUST set
+// CORS_ALLOWED_ORIGINS to a comma-separated whitelist (never `*`).
+// The `*` path remains for public, read-only, credential-less access.
 func CORSMiddleware(allowedOrigins string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -185,6 +228,9 @@ func CORSMiddleware(allowedOrigins string) func(http.Handler) http.Handler {
 
 			if allowedOrigins == "*" {
 				w.Header().Set("Access-Control-Allow-Origin", "*")
+				// Deliberately omit Allow-Credentials here: browsers
+				// reject `*` + credentials, and Cookie-based auth
+				// requires an explicit-origin configuration anyway.
 			} else if isOriginAllowed(origin, allowedOrigins) {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Access-Control-Allow-Credentials", "true")
