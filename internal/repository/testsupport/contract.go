@@ -49,6 +49,9 @@ const (
 	postC = "01HPCCCCCCCCCCCCCCCCCCCCCC"
 
 	missingID = "01HZZZZZZZZZZZZZZZZZZZZZZZ"
+
+	badgeKeyVerified  = "verified"
+	badgeKeyDeveloper = "developer"
 )
 
 func seedUser(t *testing.T, users repository.UserRepository, sub string) {
@@ -1027,12 +1030,12 @@ func RunBadgeRepositoryContract(t *testing.T, newContract Factory) {
 
 	t.Run("Create_duplicate_key_returns_nil_and_preserves_original", func(t *testing.T) {
 		c := newContract(t)
-		original := seedBadge(t, c, devID, "developer", "dev", 5)
+		original := seedBadge(t, c, devID, badgeKeyDeveloper, "dev", 5)
 
 		// Same key, fresh id → conflict on unique(key).
 		dup, err := c.Badges.Create(context.Background(), &domain.Badge{
 			ID:       verID,
-			Key:      "developer",
+			Key:      badgeKeyDeveloper,
 			Label:    "imposter",
 			Priority: 1,
 		})
@@ -1045,7 +1048,7 @@ func RunBadgeRepositoryContract(t *testing.T, newContract Factory) {
 
 		// First-writer-wins: the original row must be untouched
 		// (label / priority must not have been silently overwritten).
-		survived, err := c.Badges.GetByKey(context.Background(), "developer")
+		survived, err := c.Badges.GetByKey(context.Background(), badgeKeyDeveloper)
 		if err != nil {
 			t.Fatalf("get: %v", err)
 		}
@@ -1059,10 +1062,10 @@ func RunBadgeRepositoryContract(t *testing.T, newContract Factory) {
 
 	t.Run("GetByKey_GetByID_ListAll_priority_order", func(t *testing.T) {
 		c := newContract(t)
-		seedBadge(t, c, devID, "developer", "dev", 5)
-		seedBadge(t, c, verID, "verified", "ver", 10)
+		seedBadge(t, c, devID, badgeKeyDeveloper, "dev", 5)
+		seedBadge(t, c, verID, badgeKeyVerified, "ver", 10)
 
-		byKey, err := c.Badges.GetByKey(context.Background(), "developer")
+		byKey, err := c.Badges.GetByKey(context.Background(), badgeKeyDeveloper)
 		if err != nil {
 			t.Fatalf("get by key: %v", err)
 		}
@@ -1074,7 +1077,7 @@ func RunBadgeRepositoryContract(t *testing.T, newContract Factory) {
 		if err != nil {
 			t.Fatalf("get by id: %v", err)
 		}
-		if byID == nil || byID.Key != "verified" {
+		if byID == nil || byID.Key != badgeKeyVerified {
 			t.Fatalf("unexpected: %+v", byID)
 		}
 
@@ -1082,14 +1085,14 @@ func RunBadgeRepositoryContract(t *testing.T, newContract Factory) {
 		if err != nil {
 			t.Fatalf("list all: %v", err)
 		}
-		if len(all) != 2 || all[0].Key != "developer" || all[1].Key != "verified" {
+		if len(all) != 2 || all[0].Key != badgeKeyDeveloper || all[1].Key != badgeKeyVerified {
 			t.Fatalf("expected priority-asc [developer, verified], got %+v", all)
 		}
 	})
 
 	t.Run("Update_mutates_mutable_fields", func(t *testing.T) {
 		c := newContract(t)
-		seedBadge(t, c, devID, "developer", "dev", 5)
+		seedBadge(t, c, devID, badgeKeyDeveloper, "dev", 5)
 
 		out, err := c.Badges.Update(context.Background(), &domain.Badge{
 			ID:          devID,
@@ -1122,8 +1125,8 @@ func RunBadgeRepositoryContract(t *testing.T, newContract Factory) {
 		c := newContract(t)
 		seedUser(t, c.Users, userA)
 		seedUser(t, c.Users, userB)
-		dev := seedBadge(t, c, devID, "developer", "dev", 5)
-		ver := seedBadge(t, c, verID, "verified", "ver", 10)
+		dev := seedBadge(t, c, devID, badgeKeyDeveloper, "dev", 5)
+		ver := seedBadge(t, c, verID, badgeKeyVerified, "ver", 10)
 
 		if err := c.Badges.Grant(context.Background(), userA, dev.ID, userA, nil, ""); err != nil {
 			t.Fatalf("grant dev: %v", err)
@@ -1141,7 +1144,7 @@ func RunBadgeRepositoryContract(t *testing.T, newContract Factory) {
 		if err != nil {
 			t.Fatalf("list userA: %v", err)
 		}
-		if len(active) != 2 || active[0].Key != "developer" || active[1].Key != "verified" {
+		if len(active) != 2 || active[0].Key != badgeKeyDeveloper || active[1].Key != badgeKeyVerified {
 			t.Fatalf("expected [developer, verified], got %+v", active)
 		}
 
@@ -1161,7 +1164,7 @@ func RunBadgeRepositoryContract(t *testing.T, newContract Factory) {
 		if err != nil {
 			t.Fatalf("list after revoke: %v", err)
 		}
-		if len(after) != 1 || after[0].Key != "verified" {
+		if len(after) != 1 || after[0].Key != badgeKeyVerified {
 			t.Fatalf("expected [verified], got %+v", after)
 		}
 	})
@@ -1169,7 +1172,7 @@ func RunBadgeRepositoryContract(t *testing.T, newContract Factory) {
 	t.Run("Grant_regrant_overwrites_expires_at_reason", func(t *testing.T) {
 		c := newContract(t)
 		seedUser(t, c.Users, userA)
-		dev := seedBadge(t, c, devID, "developer", "dev", 5)
+		dev := seedBadge(t, c, devID, badgeKeyDeveloper, "dev", 5)
 
 		future := time.Now().Add(time.Hour)
 		if err := c.Badges.Grant(context.Background(), userA, dev.ID, userA, &future, "first"); err != nil {
@@ -1195,8 +1198,8 @@ func RunBadgeRepositoryContract(t *testing.T, newContract Factory) {
 		seedUser(t, c.Users, userA)
 		seedUser(t, c.Users, userB)
 		seedUser(t, c.Users, userC)
-		dev := seedBadge(t, c, devID, "developer", "dev", 5)
-		ver := seedBadge(t, c, verID, "verified", "ver", 10)
+		dev := seedBadge(t, c, devID, badgeKeyDeveloper, "dev", 5)
+		ver := seedBadge(t, c, verID, badgeKeyVerified, "ver", 10)
 
 		if err := c.Badges.Grant(context.Background(), userA, dev.ID, userA, nil, ""); err != nil {
 			t.Fatalf("grant A-dev: %v", err)
@@ -1215,10 +1218,10 @@ func RunBadgeRepositoryContract(t *testing.T, newContract Factory) {
 		if len(got) != 2 {
 			t.Fatalf("expected 2 entries (userC absent), got %d (%+v)", len(got), got)
 		}
-		if len(got[userA]) != 2 || got[userA][0].Key != "developer" {
+		if len(got[userA]) != 2 || got[userA][0].Key != badgeKeyDeveloper {
 			t.Errorf("userA wrong: %+v", got[userA])
 		}
-		if len(got[userB]) != 1 || got[userB][0].Key != "verified" {
+		if len(got[userB]) != 1 || got[userB][0].Key != badgeKeyVerified {
 			t.Errorf("userB wrong: %+v", got[userB])
 		}
 	})

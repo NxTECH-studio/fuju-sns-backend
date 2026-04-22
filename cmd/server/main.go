@@ -61,7 +61,8 @@ func main() {
 	repos, cleanupRepos, err := newRepositorySet(ctx, cfg, log)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Failed to initialize repositories: %v\n", err)
-		os.Exit(1)
+		cancelBackground()
+		os.Exit(1) //nolint:gocritic // cancelBackground() invoked above; no other deferred cleanup is live at this point.
 	}
 	defer cleanupRepos()
 

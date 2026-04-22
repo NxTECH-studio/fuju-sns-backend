@@ -19,6 +19,8 @@ const (
 	jobA = "01HJOBAAAAAAAAAAAAAAAAAAAA"
 	jobB = "01HJOBBBBBBBBBBBBBBBBBBBBB"
 	jobC = "01HJOBCCCCCCCCCCCCCCCCCCCC"
+
+	ogpTitleUpdated = "updated"
 )
 
 func seedOGPPreview(t *testing.T, cache repository.OGPCacheRepository, urlHash, url string) {
@@ -77,7 +79,7 @@ func RunOGPCacheRepositoryContract(t *testing.T, newContract Factory) {
 		err := c.OGPCache.Upsert(context.Background(), &domain.OGPPreview{
 			URLHash:   ogpHashA,
 			URL:       "https://example.com/v2",
-			Title:     "updated",
+			Title:     ogpTitleUpdated,
 			ExpiresAt: time.Now().Add(time.Hour),
 			Status:    domain.OGPStatusOK,
 		})
@@ -88,7 +90,7 @@ func RunOGPCacheRepositoryContract(t *testing.T, newContract Factory) {
 		if err != nil {
 			t.Fatalf("get: %v", err)
 		}
-		if got == nil || got.Title != "updated" || got.URL != "https://example.com/v2" {
+		if got == nil || got.Title != ogpTitleUpdated || got.URL != "https://example.com/v2" {
 			t.Fatalf("unexpected: %+v", got)
 		}
 	})
