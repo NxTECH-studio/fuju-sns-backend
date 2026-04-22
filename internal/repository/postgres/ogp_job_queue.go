@@ -23,8 +23,10 @@ func NewOGPJobQueue(pool *pgxpool.Pool) *OGPJobQueue {
 	return &OGPJobQueue{pool: pool}
 }
 
-const ogpJobSelectColumns = `id, url_hash, url, post_id, position, enqueued_at,
-	started_at, finished_at, status, attempts, last_error`
+const ogpJobSelectColumns = `ogp_jobs.id, ogp_jobs.url_hash, ogp_jobs.url,
+	ogp_jobs.post_id, ogp_jobs.position, ogp_jobs.enqueued_at,
+	ogp_jobs.started_at, ogp_jobs.finished_at, ogp_jobs.status,
+	ogp_jobs.attempts, ogp_jobs.last_error`
 
 func scanOGPJob(row pgx.Row) (*domain.OGPJob, error) {
 	var j domain.OGPJob

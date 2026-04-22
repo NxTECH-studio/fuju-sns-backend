@@ -1008,8 +1008,8 @@ func RunTagRepositoryContract(t *testing.T, newContract Factory) {
 func RunBadgeRepositoryContract(t *testing.T, newContract Factory) {
 	t.Helper()
 
-	devID := "01HBADGE0000000000000000DEV"
-	verID := "01HBADGE000000000000000VER0"
+	devID := "01HBADGEDEV000000000000000"
+	verID := "01HBADGEVER000000000000000"
 
 	seedBadge := func(t *testing.T, c Contract, id, key, label string, priority int32) *domain.Badge {
 		t.Helper()
