@@ -3,14 +3,13 @@ package inmemory
 
 import (
 	"context"
-	"encoding/base64"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/fuju/backend/internal/domain"
 	"github.com/fuju/backend/internal/repository"
+	"github.com/fuju/backend/internal/repository/sharedcursor"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -1089,7 +1088,7 @@ func (r *FollowRepository) listSide(sub string, cursor *string, limit int, follo
 		return nil, "", nil
 	}
 
-	cursorTime, cursorPeer, ok := decodeFollowCursor(cursor)
+	cursorTime, cursorPeer, ok := sharedcursor.DecodeFollow(cursor)
 	if cursor != nil && !ok {
 		// Malformed cursor — treat as "start from the top" to match how
 		// the post handler tolerates an unparseable cursor.
@@ -1135,7 +1134,7 @@ func (r *FollowRepository) listSide(sub string, cursor *string, limit int, follo
 	}
 	page := matches[:limit]
 	last := page[limit-1]
-	next := encodeFollowCursor(last.CreatedAt, peerSub(last, followersSide))
+	next := sharedcursor.EncodeFollow(last.CreatedAt, peerSub(last, followersSide))
 	return page, next, nil
 }
 
@@ -1173,39 +1172,12 @@ func isBefore(t time.Time, p string, ct time.Time, cp string) bool {
 	return p < cp
 }
 
-// encodeFollowCursor produces the cursor string used by ListFollowers /
-// ListFollowing. The separator "|" cannot occur in RFC3339Nano nor in a
-// ULID, so splitting on the first "|" is unambiguous.
-func encodeFollowCursor(t time.Time, peer string) string {
-	raw := t.UTC().Format(time.RFC3339Nano) + "|" + peer
-	return base64.RawURLEncoding.EncodeToString([]byte(raw))
-}
-
-// decodeFollowCursor reverses encodeFollowCursor. Returns ok=false for a
-// nil cursor, bad base64, a missing separator, or an unparseable time.
-func decodeFollowCursor(cursor *string) (time.Time, string, bool) {
-	if cursor == nil || *cursor == "" {
-		return time.Time{}, "", false
-	}
-	raw, err := base64.RawURLEncoding.DecodeString(*cursor)
-	if err != nil {
-		return time.Time{}, "", false
-	}
-	idx := strings.IndexByte(string(raw), '|')
-	if idx <= 0 || idx == len(raw)-1 {
-		return time.Time{}, "", false
-	}
-	t, err := time.Parse(time.RFC3339Nano, string(raw[:idx]))
-	if err != nil {
-		return time.Time{}, "", false
-	}
-	return t, string(raw[idx+1:]), true
-}
-
-// EncodeFollowCursor exposes the cursor encoder for handler tests and for
-// callers that need to build a cursor from a known (time, peer) pair.
+// EncodeFollowCursor exposes the cursor encoder for handler tests and
+// for callers that need to build a cursor from a known (time, peer)
+// pair. Delegates to sharedcursor so in-memory and postgres backends
+// mint byte-identical cursors.
 func EncodeFollowCursor(t time.Time, peer string) string {
-	return encodeFollowCursor(t, peer)
+	return sharedcursor.EncodeFollow(t, peer)
 }
 
 // OGPCacheRepository is an in-memory implementation of

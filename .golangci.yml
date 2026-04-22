@@ -23,6 +23,11 @@ linters:
   disable:
     - gosec
     - prealloc
+  exclusions:
+    rules:
+      - path: internal/repository/testsupport/
+        linters:
+          - gocyclo
 
 formatters:
   enable:

@@ -1,4 +1,4 @@
-.PHONY: setup build test lint fmt fmt-fix clean run help db-up db-down db-init db-reset db-shell
+.PHONY: setup build test test-integration lint fmt fmt-fix clean run help db-up db-down db-init db-reset db-shell
 
 # Variables
 BINARY_NAME=fuju-backend
@@ -23,10 +23,11 @@ help:
 	@echo "  make run           - Run the server locally"
 	@echo ""
 	@echo "Testing & Quality:"
-	@echo "  make test          - Run all tests with coverage"
-	@echo "  make test-verbose  - Run tests with verbose output"
-	@echo "  make lint          - Run linters (golangci-lint)"
-	@echo "  make fmt           - Format code (go fmt)"
+	@echo "  make test             - Run all tests with coverage"
+	@echo "  make test-verbose     - Run tests with verbose output"
+	@echo "  make test-integration - Run postgres-backed integration tests"
+	@echo "  make lint             - Run linters (golangci-lint)"
+	@echo "  make fmt              - Format code (go fmt)"
 	@echo ""
 	@echo "Database:"
 	@echo "  make db-up         - Start PostgreSQL with Docker Compose"
@@ -69,6 +70,14 @@ test:
 test-verbose:
 	@echo "Running tests with race detection..."
 	$(GO) test -v -race -coverprofile=coverage.out ./...
+
+# Integration tests: postgres-backed repository contract tests. Requires
+# `make db-up && make db-init` (or an equivalent DATABASE_URL target).
+test-integration:
+	@echo "Running integration tests against postgres..."
+	DATABASE_URL="postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=disable" \
+	REPO_BACKEND=postgres \
+	$(GO) test -tags=integration -race ./internal/repository/postgres/...
 
 # Lint: Run golangci-lint
 lint:
