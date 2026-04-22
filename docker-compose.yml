@@ -46,12 +46,12 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD:-fuju_password}
       POSTGRES_DB: ${DB_NAME:-fuju}
     ports:
-      - "${DB_PORT:-5432}:5432"
+      - "${DB_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./db/migrations:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-fuju_user}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER:-fuju_user}" ]
       interval: 10s
       timeout: 5s
       retries: 5
