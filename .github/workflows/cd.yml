@@ -21,6 +21,6 @@ jobs:
           username: ${{ vars.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            cd /home/fuju/bank
+            cd /home/fuju/sns-be
             git pull origin main
             docker compose up -d --build
