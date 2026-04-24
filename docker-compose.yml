@@ -17,6 +17,8 @@ services:
       DB_NAME: ${DB_NAME:-fuju}
       DB_USER: ${DB_USER:-fuju_user}
       DB_PASSWORD: ${DB_PASSWORD:-fuju_password}
+      DB_MAX_CONN: ${DB_MAX_CONN:-25}
+      DB_MIN_CONN: ${DB_MIN_CONN:-5}
       AUTHCORE_BASE_URL: ${AUTHCORE_BASE_URL}
       AUTHCORE_CLIENT_ID: ${AUTHCORE_CLIENT_ID}
       AUTHCORE_CLIENT_SECRET: ${AUTHCORE_CLIENT_SECRET}
@@ -30,7 +32,8 @@ services:
       R2_BUCKET_NAME: ${R2_BUCKET_NAME}
       R2_PUBLIC_DOMAIN: ${R2_PUBLIC_DOMAIN}
       R2_MAX_FILE_SIZE: ${R2_MAX_FILE_SIZE:-5242880}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://sns.fujupay.app}
+      FRONTEND_URL: ${FRONTEND_URL:-https://sns.fujupay.app}
     depends_on:
       postgres:
         condition: service_healthy
@@ -51,23 +54,10 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./db/migrations:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-fuju_user}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${DB_USER:-fuju_user}" ]
       interval: 10s
       timeout: 5s
       retries: 5
-    networks:
-      - fuju-network
-
-  adminer:
-    image: adminer:latest
-    container_name: fuju-adminer
-    ports:
-      - "8081:8080"
-    environment:
-      ADMINER_DEFAULT_SERVER: postgres
-    depends_on:
-      postgres:
-        condition: service_healthy
     networks:
       - fuju-network
 
