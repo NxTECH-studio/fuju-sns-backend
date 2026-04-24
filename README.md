@@ -2,12 +2,27 @@
 
 A modern SNS (Social Network Service) backend built with Go, following Clean Architecture principles.
 
+## Quick Links
+
+Frontend developers integrating against this backend should read in this
+order:
+
+1. This README (repository overview, local start-up)
+2. [`docs/product-overview.md`](docs/product-overview.md) — product
+   features, user model, ULID identifiers, timeline paging, error envelope
+3. [`docs/swagger.yaml`](docs/swagger.yaml) — OpenAPI 3.0.3 spec (type-
+   generation-ready)
+4. [`docs/authcore-integration.md`](docs/authcore-integration.md) —
+   AuthCore Bearer token flow, `/me` hydrate, admin flag, CORS
+
+Backend maintainers: see [`docs/architecture.md`](docs/architecture.md)
+and [`docs/IMPLEMENTATION_GUIDE.md`](docs/IMPLEMENTATION_GUIDE.md).
+
 ## Features
 
 - **Clean Architecture**: Strict layer separation (Domain, Usecase, Repository, Handler, Middleware)
-- **Authentication**: OAuth2.0 + JWT (mobile) + Session Cookies (web)
+- **Authentication**: Bearer JWT (AuthCore-issued) validated via RFC 7662 introspection
 - **Database**: PostgreSQL with connection pooling
-- **Caching**: Redis for sessions and frequently accessed data
 - **Structured Logging**: JSON-formatted logs for easy parsing
 - **Testing**: Comprehensive unit and integration tests
 - **CI/CD**: GitHub Actions with automated testing, linting, and security checks
@@ -20,7 +35,6 @@ A modern SNS (Social Network Service) backend built with Go, following Clean Arc
 
 - Go 1.21+
 - PostgreSQL 13+
-- Redis 7+
 - Make
 
 ### Installation
@@ -60,19 +74,20 @@ Required:
 - `DB_NAME`: Database name
 - `DB_USER`: Database user
 - `DB_PASSWORD`: Database password
-- `REDIS_URL`: Redis connection URL
-- `OAUTH_CLIENT_ID`: OAuth2 client ID
-- `OAUTH_CLIENT_SECRET`: OAuth2 client secret
-- `OAUTH_REDIRECT_URL`: OAuth2 redirect URL
-- `JWT_SECRET`: Secret key for JWT signing
-- `SESSION_SECRET`: Secret key for session encryption
+- `AUTHCORE_BASE_URL`: Base URL of the AuthCore service (no trailing slash)
+- `AUTHCORE_CLIENT_ID`: AuthCore client ID (confidential client used for introspection)
+- `AUTHCORE_CLIENT_SECRET`: AuthCore client secret
 
 Optional:
 - `SERVER_PORT`: HTTP server port (default: 8080)
 - `ENVIRONMENT`: Environment (development, staging, production)
 - `LOG_LEVEL`: Log level (debug, info, warn, error)
-- `DB_MAX_CONN`: Maximum database connections (default: 25)
-- `DB_MIN_CONN`: Minimum database connections (default: 5)
+- `AUTHCORE_INTROSPECT_PATH`: RFC 7662 path (default: `/v1/auth/introspect`)
+- `AUTHCORE_PROFILE_PATH`: Profile endpoint path (default: `/v1/user/profile`)
+- `AUTHCORE_PROFILE_TTL`: Mirror refresh TTL (default: `1h`)
+- `AUTHCORE_INTROSPECT_CACHE_TTL`: In-memory introspection cache TTL (default: `30s`)
+- `CORS_ALLOWED_ORIGINS`: Comma-separated origins (default: `*`)
+- `OGP_USER_AGENT`: User-Agent sent by the OGP fetcher
 
 ## Project Structure
 
@@ -90,8 +105,7 @@ backend/
 │   ├── db/              # Database utilities
 │   ├── logger/          # Structured logging
 │   ├── errors/          # Error handling
-│   ├── cache/           # Redis caching
-│   └── auth/            # Authentication utilities
+│   └── authcore/        # AuthCore introspection client + 30s in-memory cache
 ├── config/              # Configuration management
 ├── docs/
 │   ├── swagger.yaml     # API specification
@@ -168,26 +182,14 @@ make build-prod        # Build production binary
 
 ## Authentication
 
-### Web Application (Browser)
+Clients obtain an access token from AuthCore and pass it as
+`Authorization: Bearer <token>` on every FUJU API call. The backend
+validates it per request via RFC 7662 introspection with a 30s
+in-memory cache. No cookies are issued by this service.
 
-1. User initiates OAuth2 login
-2. Backend redirects to OAuth2 provider
-3. OAuth2 provider redirects back with authorization code
-4. Backend exchanges code for token and creates session cookie
-5. Frontend uses HttpOnly cookie for subsequent requests
-
-**Security**: CSRF tokens, HttpOnly cookies, SameSite=Strict
-
-### Mobile Application
-
-1. Mobile app handles OAuth2 login flow
-2. App sends authorization code to backend
-3. Backend exchanges code for tokens
-4. Backend returns JWT and refresh token to app
-5. App stores JWT in secure storage (Keychain/Keysafe)
-6. App includes JWT in Authorization header for API requests
-
-**Security**: Short-lived JWT, refresh token rotation, secure storage
+See [`docs/authcore-integration.md`](docs/authcore-integration.md) for
+the FE-facing flow (token refresh, `/me` hydrate, admin flag, CORS) and
+`pkg/authcore/` + `internal/middleware/` for the backend implementation.
 
 ## Database
 
@@ -197,16 +199,16 @@ make build-prod        # Build production binary
 # Create database
 createdb fuju
 
-# Run migrations (to be implemented)
-make migrate
+# Apply migrations (PostgreSQL must be running)
+make db-init
 ```
 
 ### Schema
 
-- **users**: User profiles and OAuth information
-- **posts**: User posts/tweets
-- **comments**: Comments on posts
-- **sessions**: Active user sessions (also in Redis)
+- **users**: SNS-local mirror cache of AuthCore profile + bio / banner / is_admin
+- **posts**: User posts, including replies via `parent_post_id`
+- **likes**: Like relationships between users and posts
+- **images**: Uploaded image metadata (Cloudflare R2 storage keys)
 
 ## Testing
 
@@ -220,7 +222,7 @@ go test -v ./internal/usecase/...
 
 ### Integration Tests
 
-Test components with real PostgreSQL and Redis services.
+Test components with a real PostgreSQL service.
 
 ```bash
 go test -v -race ./...

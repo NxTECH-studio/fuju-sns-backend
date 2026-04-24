@@ -1,71 +1,118 @@
 // Package config provides configuration loading and management.
+//
+// Repository backend selection: REPO_BACKEND explicitly chooses
+// "inmemory" or "postgres"; when unset, development environments
+// default to inmemory and everything else (staging / production) to
+// postgres. The DB_* fields are the authoritative connection source
+// for the postgres backend; DATABASE_URL, when set, overrides them
+// so cloud deployments can pass a single URL and container specs can
+// still rely on DB_* individually.
 package config
 
 import (
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 )
 
-// Config holds all application configuration
+// Repository backend identifiers. Values are stable — cfg file / env
+// var / docs all reference these constants.
+const (
+	RepoBackendInMemory = "inmemory"
+	RepoBackendPostgres = "postgres"
+)
+
+// Config holds all application configuration.
 type Config struct {
 	// Server
-	ServerPort  int    `default:"8080"`
-	Environment string `default:"development"`
+	ServerPort  int
+	Environment string
 
 	// Database
-	DBHost     string `required:"true"`
-	DBPort     int    `default:"5432"`
-	DBName     string `required:"true"`
-	DBUser     string `required:"true"`
-	DBPassword string `required:"true"`
-	DBMaxConn  int    `default:"25"`
-	DBMinConn  int    `default:"5"`
+	DBHost      string
+	DBPort      int
+	DBName      string
+	DBUser      string
+	DBPassword  string
+	DatabaseURL string // optional: full DSN, overrides DB_* when set
+	DBMaxConns  int32  // optional; 0 = pgx default
+	DBMinConns  int32  // optional; 0 = pgx default
 
-	// Redis
-	RedisURL string `required:"true"`
+	// repoBackendRaw is the literal REPO_BACKEND env value. Callers
+	// use the RepoBackend() method to resolve the effective backend;
+	// keeping the raw string unexported forces that indirection.
+	repoBackendRaw string
 
-	// OAuth2
-	OAuthClientID     string `required:"true"`
-	OAuthClientSecret string `required:"true"`
-	OAuthRedirectURL  string `required:"true"`
+	// AuthCore
+	AuthCoreBaseURL            string
+	AuthCoreClientID           string
+	AuthCoreClientSecret       string
+	AuthCoreIntrospectPath     string
+	AuthCoreProfilePath        string
+	AuthCoreProfileTTL         time.Duration
+	AuthCoreIntrospectCacheTTL time.Duration
 
-	// JWT
-	JWTSecret     string `required:"true"`
-	JWTExpiration int    `default:"1800"` // 30 minutes
+	// Session cookie (handoff flow: POST /v1/auth/session → Set-Cookie:
+	// fuju_access=...). The cookie value is the AuthCore access token
+	// verbatim; no server-side session store is involved. See
+	// docs/tasks/10-cookie-session-handoff.md.
+	SessionCookieName           string        // default "fuju_access"
+	SessionCookieSecure         bool          // default true; dev may set false
+	SessionCookieSameSite       string        // "Lax" | "Strict" | "None"; default "Lax"
+	SessionCookieDomain         string        // optional; empty = host-only cookie
+	SessionCookieFallbackMaxAge time.Duration // default 1h; used when the access token lacks an `exp` claim
 
-	// Session
-	SessionSecret   string `required:"true"`
-	SessionDuration int    `default:"86400"` // 24 hours
+	// sessionCookieSameSiteMode caches the parsed form of
+	// SessionCookieSameSite. Populated by Validate so wiring code does
+	// not have to re-run the same switch. Do not access directly; use
+	// SessionCookieSameSiteMode() which guards the init order.
+	sessionCookieSameSiteMode http.SameSite
 
 	// Logging
-	LogLevel string `default:"info"`
+	LogLevel string
+
+	// CORS
+	CORSAllowedOrigins string
+
+	// OGP fetcher
+	OGPUserAgent string
 }
 
-// Load loads configuration from environment variables
+// Load loads configuration from environment variables.
 func Load() (*Config, error) {
 	cfg := &Config{
-		ServerPort:        getEnvInt("SERVER_PORT", 8080),
-		Environment:       getEnv("ENVIRONMENT", "development"),
-		DBHost:            getEnv("DB_HOST", ""),
-		DBPort:            getEnvInt("DB_PORT", 5432),
-		DBName:            getEnv("DB_NAME", ""),
-		DBUser:            getEnv("DB_USER", ""),
-		DBPassword:        getEnv("DB_PASSWORD", ""),
-		DBMaxConn:         getEnvInt("DB_MAX_CONN", 25),
-		DBMinConn:         getEnvInt("DB_MIN_CONN", 5),
-		RedisURL:          getEnv("REDIS_URL", ""),
-		OAuthClientID:     getEnv("OAUTH_CLIENT_ID", ""),
-		OAuthClientSecret: getEnv("OAUTH_CLIENT_SECRET", ""),
-		OAuthRedirectURL:  getEnv("OAUTH_REDIRECT_URL", ""),
-		JWTSecret:         getEnv("JWT_SECRET", ""),
-		JWTExpiration:     getEnvInt("JWT_EXPIRATION", 1800),
-		SessionSecret:     getEnv("SESSION_SECRET", ""),
-		SessionDuration:   getEnvInt("SESSION_DURATION", 86400),
-		LogLevel:          getEnv("LOG_LEVEL", "info"),
+		ServerPort:                  getEnvInt("SERVER_PORT", 8080),
+		Environment:                 getEnv("ENVIRONMENT", "development"),
+		DBHost:                      getEnv("DB_HOST", ""),
+		DBPort:                      getEnvInt("DB_PORT", 5432),
+		DBName:                      getEnv("DB_NAME", ""),
+		DBUser:                      getEnv("DB_USER", ""),
+		DBPassword:                  getEnv("DB_PASSWORD", ""),
+		DatabaseURL:                 getEnv("DATABASE_URL", ""),
+		DBMaxConns:                  int32(getEnvInt("DB_MAX_CONNS", 0)),
+		DBMinConns:                  int32(getEnvInt("DB_MIN_CONNS", 0)),
+		repoBackendRaw:              getEnv("REPO_BACKEND", ""),
+		AuthCoreBaseURL:             getEnv("AUTHCORE_BASE_URL", ""),
+		AuthCoreClientID:            getEnv("AUTHCORE_CLIENT_ID", ""),
+		AuthCoreClientSecret:        getEnv("AUTHCORE_CLIENT_SECRET", ""),
+		AuthCoreIntrospectPath:      getEnv("AUTHCORE_INTROSPECT_PATH", "/v1/auth/introspect"),
+		AuthCoreProfilePath:         getEnv("AUTHCORE_PROFILE_PATH", "/v1/user/profile"),
+		AuthCoreProfileTTL:          getEnvDuration("AUTHCORE_PROFILE_TTL", time.Hour),
+		AuthCoreIntrospectCacheTTL:  getEnvDuration("AUTHCORE_INTROSPECT_CACHE_TTL", 30*time.Second),
+		SessionCookieName:           getEnv("SESSION_COOKIE_NAME", "fuju_access"),
+		SessionCookieSecure:         getEnvBool("SESSION_COOKIE_SECURE", true),
+		SessionCookieSameSite:       getEnv("SESSION_COOKIE_SAMESITE", "Lax"),
+		SessionCookieDomain:         getEnv("SESSION_COOKIE_DOMAIN", ""),
+		SessionCookieFallbackMaxAge: getEnvDuration("SESSION_COOKIE_FALLBACK_MAX_AGE", time.Hour),
+		LogLevel:                    getEnv("LOG_LEVEL", "info"),
+		CORSAllowedOrigins:          getEnv("CORS_ALLOWED_ORIGINS", "*"),
+		OGPUserAgent:                getEnv("OGP_USER_AGENT", "FujuBot/1.0 (+https://fuju.example.com/bot)"),
 	}
 
-	// Validate required fields
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -73,43 +120,138 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// Validate validates the configuration
+// RepoBackend resolves the effective repository backend:
+//   - explicit REPO_BACKEND wins
+//   - unset + Environment == "development" → inmemory (fast local start)
+//   - unset + anything else → postgres (production-safe default)
+func (c *Config) RepoBackend() string {
+	switch c.repoBackendRaw {
+	case RepoBackendInMemory, RepoBackendPostgres:
+		return c.repoBackendRaw
+	}
+	if c.Environment == "development" {
+		return RepoBackendInMemory
+	}
+	return RepoBackendPostgres
+}
+
+// MaxConns exposes the configured pool max for pkg/db.NewPool. Zero
+// means "inherit pgx default".
+func (c *Config) MaxConns() int32 { return c.DBMaxConns }
+
+// MinConns exposes the configured pool min for pkg/db.NewPool. Zero
+// means "inherit pgx default".
+func (c *Config) MinConns() int32 { return c.DBMinConns }
+
+// DSN returns the connection string for the postgres backend. When
+// DATABASE_URL is set it wins verbatim (so cloud secrets that embed
+// sslmode / pool params pass through unchanged); otherwise a DSN is
+// assembled from the DB_* fields with sslmode=disable (acceptable
+// for dev and behind-VPC production; public deployments must use
+// DATABASE_URL with sslmode=require).
+func (c *Config) DSN() string {
+	if c.DatabaseURL != "" {
+		return c.DatabaseURL
+	}
+	// url.UserPassword handles percent-encoding of special chars in
+	// passwords (e.g. '@' or ':') that would otherwise break the DSN
+	// parser.
+	u := &url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(c.DBUser, c.DBPassword),
+		Host:     fmt.Sprintf("%s:%d", c.DBHost, c.DBPort),
+		Path:     "/" + c.DBName,
+		RawQuery: "sslmode=disable",
+	}
+	return u.String()
+}
+
+// Validate validates the configuration. DB_* fields are required only
+// when the effective backend is postgres AND DATABASE_URL is absent;
+// running the in-memory backend in dev should not demand a DB config.
 func (c *Config) Validate() error {
-	if c.DBHost == "" {
-		return fmt.Errorf("DB_HOST is required")
-	}
-	if c.DBName == "" {
-		return fmt.Errorf("DB_NAME is required")
-	}
-	if c.DBUser == "" {
-		return fmt.Errorf("DB_USER is required")
-	}
-	if c.DBPassword == "" {
-		return fmt.Errorf("DB_PASSWORD is required")
-	}
-	if c.RedisURL == "" {
-		return fmt.Errorf("REDIS_URL is required")
-	}
-	if c.OAuthClientID == "" {
-		return fmt.Errorf("OAUTH_CLIENT_ID is required")
-	}
-	if c.OAuthClientSecret == "" {
-		return fmt.Errorf("OAUTH_CLIENT_SECRET is required")
-	}
-	if c.OAuthRedirectURL == "" {
-		return fmt.Errorf("OAUTH_REDIRECT_URL is required")
-	}
-	if c.JWTSecret == "" {
-		return fmt.Errorf("JWT_SECRET is required")
-	}
-	if c.SessionSecret == "" {
-		return fmt.Errorf("SESSION_SECRET is required")
+	if c.repoBackendRaw != "" &&
+		c.repoBackendRaw != RepoBackendInMemory &&
+		c.repoBackendRaw != RepoBackendPostgres {
+		return fmt.Errorf("REPO_BACKEND must be %q or %q, got %q",
+			RepoBackendInMemory, RepoBackendPostgres, c.repoBackendRaw)
 	}
 
+	if c.RepoBackend() == RepoBackendPostgres {
+		if c.DatabaseURL != "" {
+			// Reject non-postgres schemes up front; pgx would eventually
+			// fail in NewPool, but catching it at Load keeps startup
+			// error messages close to the config source.
+			if !strings.HasPrefix(c.DatabaseURL, "postgres://") && !strings.HasPrefix(c.DatabaseURL, "postgresql://") {
+				return fmt.Errorf("DATABASE_URL must start with postgres:// or postgresql://")
+			}
+		} else {
+			if c.DBHost == "" {
+				return fmt.Errorf("DB_HOST is required when REPO_BACKEND=postgres and DATABASE_URL is unset")
+			}
+			if c.DBName == "" {
+				return fmt.Errorf("DB_NAME is required when REPO_BACKEND=postgres and DATABASE_URL is unset")
+			}
+			if c.DBUser == "" {
+				return fmt.Errorf("DB_USER is required when REPO_BACKEND=postgres and DATABASE_URL is unset")
+			}
+			if c.DBPassword == "" {
+				return fmt.Errorf("DB_PASSWORD is required when REPO_BACKEND=postgres and DATABASE_URL is unset")
+			}
+		}
+	}
+
+	if c.AuthCoreBaseURL == "" {
+		return fmt.Errorf("AUTHCORE_BASE_URL is required")
+	}
+	if c.AuthCoreClientID == "" {
+		return fmt.Errorf("AUTHCORE_CLIENT_ID is required")
+	}
+	if c.AuthCoreClientSecret == "" {
+		return fmt.Errorf("AUTHCORE_CLIENT_SECRET is required")
+	}
+	switch c.SessionCookieSameSite {
+	case "Lax":
+		c.sessionCookieSameSiteMode = http.SameSiteLaxMode
+	case "Strict":
+		c.sessionCookieSameSiteMode = http.SameSiteStrictMode
+	case "None":
+		c.sessionCookieSameSiteMode = http.SameSiteNoneMode
+	default:
+		return fmt.Errorf("SESSION_COOKIE_SAMESITE must be Lax, Strict, or None, got %q", c.SessionCookieSameSite)
+	}
+	// SameSite=None requires Secure: browsers reject the combination
+	// otherwise. Catch it at boot rather than in ad-hoc request logs.
+	if c.SessionCookieSameSite == "None" && !c.SessionCookieSecure {
+		return fmt.Errorf("SESSION_COOKIE_SAMESITE=None requires SESSION_COOKIE_SECURE=true")
+	}
+	// Anything beyond local dev must ship a Secure cookie — a plain-HTTP
+	// staging / production deployment would leak the access token on
+	// the wire. "development" is the only environment where Secure=false
+	// is legitimate (localhost http).
+	if !c.SessionCookieSecure && c.Environment != "development" {
+		return fmt.Errorf("SESSION_COOKIE_SECURE=true is required when ENVIRONMENT != development (got %q)", c.Environment)
+	}
+	// A zero fallback would emit a session cookie (no Max-Age) whenever
+	// the access token lacks an exp claim; that is never what we want
+	// for an auth cookie. Reject up-front.
+	if c.SessionCookieFallbackMaxAge <= 0 {
+		return fmt.Errorf("SESSION_COOKIE_FALLBACK_MAX_AGE must be > 0 (got %s)", c.SessionCookieFallbackMaxAge)
+	}
 	return nil
 }
 
+// SessionCookieSameSiteMode returns the http.SameSite value matching
+// SessionCookieSameSite. Validate populates this; callers that bypass
+// Validate get http.SameSiteDefaultMode (the zero value), which is
+// never a configuration we want to emit — but since every real code
+// path runs Validate via Load, the guard is belt-and-suspenders.
+func (c *Config) SessionCookieSameSiteMode() http.SameSite {
+	return c.sessionCookieSameSiteMode
+}
+
 // Helper functions
+
 func getEnv(key, defaultValue string) string {
 	value := os.Getenv(key)
 	if value == "" {
@@ -130,4 +272,31 @@ func getEnvInt(key string, defaultValue int) int {
 	}
 
 	return intValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "true", "1", "yes", "on":
+		return true
+	case "false", "0", "no", "off":
+		return false
+	default:
+		return defaultValue
+	}
+}
+
+func getEnvDuration(key string, defaultValue time.Duration) time.Duration {
+	value := os.Getenv(key)
+	if value == "" {
+		return defaultValue
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil {
+		return defaultValue
+	}
+	return d
 }

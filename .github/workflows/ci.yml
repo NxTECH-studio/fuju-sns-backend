@@ -12,7 +12,8 @@ permissions:
     issues: write
 
 env:
-    GO_VERSION: "1.26.2"
+    # Keep in sync with the `go` directive in go.mod.
+    GO_VERSION: "1.25"
     GOLANGCI_LINT_VERSION: "v2.11.4"
 
 jobs:
@@ -73,16 +74,6 @@ jobs:
                 ports:
                     - 5432:5432
 
-            redis:
-                image: redis:7-alpine
-                options: >-
-                    --health-cmd "redis-cli ping"
-                    --health-interval 10s
-                    --health-timeout 5s
-                    --health-retries 5
-                ports:
-                    - 6379:6379
-
         steps:
             - uses: actions/checkout@v4
 
@@ -95,6 +86,20 @@ jobs:
             - name: Download dependencies
               run: go mod download
 
+            # Apply migrations first so both unit tests (which may
+            # exercise schema-dependent code paths) and the integration
+            # job run against a fully-migrated database. Iteration uses
+            # the numeric prefixes on filenames (001_..008_) — the glob
+            # expands in lexical order which matches the db/init.sh
+            # ordering.
+            - name: Apply database migrations
+              run: |
+                  set -euo pipefail
+                  for m in db/migrations/*.sql; do
+                    echo "Applying $(basename "$m")"
+                    PGPASSWORD=testpass psql -h localhost -U fuju -d fuju_test -v ON_ERROR_STOP=1 -f "$m"
+                  done
+
             - name: Run unit tests
               run: go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
               env:
@@ -103,7 +108,12 @@ jobs:
                   DB_NAME: fuju_test
                   DB_USER: fuju
                   DB_PASSWORD: testpass
-                  REDIS_URL: redis://localhost:6379
+
+            - name: Run integration tests (postgres)
+              run: go test -tags=integration -race ./internal/repository/postgres/...
+              env:
+                  DATABASE_URL: postgres://fuju:testpass@localhost:5432/fuju_test?sslmode=disable
+                  REPO_BACKEND: postgres
 
             - name: Upload coverage to Codecov
               uses: codecov/codecov-action@v3
