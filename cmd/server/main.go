@@ -18,12 +18,14 @@ import (
 	adminusecase "github.com/fuju/backend/internal/usecase/admin"
 	badgeusecase "github.com/fuju/backend/internal/usecase/badge"
 	followusecase "github.com/fuju/backend/internal/usecase/follow"
+	fujuusecase "github.com/fuju/backend/internal/usecase/fuju"
 	imageusecase "github.com/fuju/backend/internal/usecase/image"
 	ogpusecase "github.com/fuju/backend/internal/usecase/ogp"
 	postusecase "github.com/fuju/backend/internal/usecase/post"
 	timelineusecase "github.com/fuju/backend/internal/usecase/timeline"
 	userusecase "github.com/fuju/backend/internal/usecase/user"
 	"github.com/fuju/backend/pkg/authcore"
+	"github.com/fuju/backend/pkg/fujumodel"
 	"github.com/fuju/backend/pkg/logger"
 	"github.com/fuju/backend/pkg/ogp"
 	"github.com/fuju/backend/pkg/storage"
@@ -87,6 +89,39 @@ func main() {
 	cachedAuthCore := authcore.NewIntrospectCache(authcoreClient, cfg.AuthCoreIntrospectCacheTTL)
 	cachedAuthCore.StartJanitor(ctx, cfg.AuthCoreIntrospectCacheTTL)
 
+	// fuju-emotion-model 連携。FUJU_MODEL_BASE_URL / TENANT_ID が両方
+	// 設定されているときだけ有効化する。Disabled 時は dispatcher を立て
+	// ないので、フックは下の `fujuDispatcher == nil` ガードで no-op に
+	// なる。Run/Wait は disabled だと走らない。
+	var fujuDispatcher *fujuusecase.Dispatcher
+	if cfg.FujuModelEnabled() {
+		serviceTokens := authcore.NewCachedServiceTokenSource(authcoreClient, 60*time.Second)
+		fujuClient, err := fujumodel.New(fujumodel.Options{
+			BaseURL:  cfg.FujuModelBaseURL,
+			TenantID: cfg.FujuModelTenantID,
+			Tokens:   serviceTokens,
+			Scope:    cfg.FujuModelScope,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to construct fuju client: %v\n", err)
+			cancelBackground()
+			os.Exit(1) //nolint:gocritic // cleanup is local; cancelBackground() invoked above.
+		}
+		fujuDispatcher, err = fujuusecase.NewDispatcher(fujuusecase.Options{
+			Sender:        fujuClient,
+			Log:           log,
+			BatchSize:     cfg.FujuModelBatchSize,
+			FlushInterval: cfg.FujuModelFlushInterval,
+			SendTimeout:   cfg.FujuModelSendTimeout,
+			QueueCapacity: cfg.FujuModelQueueCapacity,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to construct fuju dispatcher: %v\n", err)
+			cancelBackground()
+			os.Exit(1) //nolint:gocritic // cleanup is local; cancelBackground() invoked above.
+		}
+	}
+
 	// Use cases
 	userGetUC := userusecase.NewGetUserUseCase(userRepo)
 	userHydrateUC := userusecase.NewGetOrHydrateUserUseCase(userRepo, cachedAuthCore, cfg.AuthCoreProfileTTL, log)
@@ -104,14 +139,16 @@ func main() {
 	postGetUC := postusecase.NewGetPostUseCase(postRepo, postHydrator)
 	postCreateUC := postusecase.
 		NewCreatePostUseCase(postRepo, imageRepo, tagRepo, tagEx).
-		WithCommitHook(ogpEnqueuer.EnqueueForPost)
+		WithCommitHook(composeCreatePostHooks(ogpEnqueuer.EnqueueForPost, fujuPostCommitHook(fujuDispatcher)))
 	postDeleteUC := postusecase.NewDeletePostUseCase(postRepo)
 	postListUC := postusecase.NewListPostsUseCase(postRepo, postHydrator)
 	postRepliesUC := postusecase.NewListRepliesUseCase(postRepo, postHydrator)
-	postLikeUC := postusecase.NewLikePostUseCase(postRepo, likeRepo)
+	postLikeUC := postusecase.NewLikePostUseCase(postRepo, likeRepo).
+		WithCommitHook(fujuLikeCommitHook(fujuDispatcher))
 	postUnlikeUC := postusecase.NewUnlikePostUseCase(postRepo, likeRepo)
 
-	followUC := followusecase.NewUseCase(userRepo, followRepo)
+	followUC := followusecase.NewUseCase(userRepo, followRepo).
+		WithCommitHook(fujuFollowCommitHook(fujuDispatcher))
 	unfollowUC := followusecase.NewUnfollowUseCase(userRepo, followRepo)
 	listFollowersUC := followusecase.NewListFollowersUseCase(userRepo, followRepo)
 	listFollowingUC := followusecase.NewListFollowingUseCase(userRepo, followRepo)
@@ -194,6 +231,12 @@ func main() {
 
 	// Me: authenticated caller's own record (lazy-created / hydrated).
 	mux.Handle("GET /me", authed(http.HandlerFunc(userHandler.Me)))
+
+	// Frontend telemetry → fuju (only mounted when integration is on).
+	if fujuDispatcher != nil {
+		meEventsHandler := handler.NewMeEventsHandler(fujuDispatcher)
+		mux.Handle("POST /v1/me/events", authed(http.HandlerFunc(meEventsHandler.PostEvents)))
+	}
 
 	// Users
 	mux.HandleFunc("GET /users", userHandler.ListUsers)
@@ -281,6 +324,20 @@ func main() {
 		ogpWorker.Run(ctx)
 		log.Info(ctx, "OGP worker stopped")
 	}()
+
+	// fuju dispatcher — drains content / event queues to fuju in
+	// batches. Lifecycle is tied to the same background context so it
+	// flushes on shutdown alongside the OGP worker.
+	if fujuDispatcher != nil {
+		workerWG.Add(1)
+		go func() {
+			defer workerWG.Done()
+			log.Info(ctx, "fuju dispatcher started")
+			fujuDispatcher.Run(ctx)
+			fujuDispatcher.Wait()
+			log.Info(ctx, "fuju dispatcher stopped")
+		}()
+	}
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
