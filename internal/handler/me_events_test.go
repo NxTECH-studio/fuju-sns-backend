@@ -46,22 +46,16 @@ func (r *recSender) SendEvents(_ context.Context, e []fujumodel.Event) error {
 	return nil
 }
 
-// snapshotEvents / snapshotContents return a defensive copy of the
-// recorded batches under the mutex. Tests must read through these
-// helpers, not the raw slice fields.
+// snapshotEvents returns a defensive copy of the recorded batches
+// under the mutex. Tests must read through this helper, not the raw
+// slice fields. (The contents counterpart is omitted until a test
+// actually reads it — golangci-lint's `unused` rejects the symmetric
+// helper otherwise.)
 func (r *recSender) snapshotEvents() [][]fujumodel.Event {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make([][]fujumodel.Event, len(r.events))
 	copy(out, r.events)
-	return out
-}
-
-func (r *recSender) snapshotContents() [][]fujumodel.Content {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	out := make([][]fujumodel.Content, len(r.contents))
-	copy(out, r.contents)
 	return out
 }
 
