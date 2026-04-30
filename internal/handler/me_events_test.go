@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,7 +18,12 @@ import (
 )
 
 // recordingSender captures every batch the dispatcher flushes.
+// Reads from the test goroutine race with writes from the dispatcher's
+// flush loop, so the slices need a mutex (the production Sender is the
+// real fuju HTTP client which has its own internal sync — recSender is
+// the test-only double).
 type recSender struct {
+	mu       sync.Mutex
 	events   [][]fujumodel.Event
 	contents [][]fujumodel.Content
 }
@@ -25,15 +31,38 @@ type recSender struct {
 func (r *recSender) RegisterContents(_ context.Context, c []fujumodel.Content) error {
 	cp := make([]fujumodel.Content, len(c))
 	copy(cp, c)
+	r.mu.Lock()
 	r.contents = append(r.contents, cp)
+	r.mu.Unlock()
 	return nil
 }
 
 func (r *recSender) SendEvents(_ context.Context, e []fujumodel.Event) error {
 	cp := make([]fujumodel.Event, len(e))
 	copy(cp, e)
+	r.mu.Lock()
 	r.events = append(r.events, cp)
+	r.mu.Unlock()
 	return nil
+}
+
+// snapshotEvents / snapshotContents return a defensive copy of the
+// recorded batches under the mutex. Tests must read through these
+// helpers, not the raw slice fields.
+func (r *recSender) snapshotEvents() [][]fujumodel.Event {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([][]fujumodel.Event, len(r.events))
+	copy(out, r.events)
+	return out
+}
+
+func (r *recSender) snapshotContents() [][]fujumodel.Content {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([][]fujumodel.Content, len(r.contents))
+	copy(out, r.contents)
+	return out
 }
 
 func newEventsFixture(t *testing.T) (*MeEventsHandler, *recSender) {
@@ -108,13 +137,13 @@ func TestMeEvents_HappyPath(t *testing.T) {
 
 	waitFor(t, time.Second, func() bool {
 		count := 0
-		for _, b := range sender.events {
+		for _, b := range sender.snapshotEvents() {
 			count += len(b)
 		}
 		return count == 2
 	})
 	// user_id is server-overridden; confirm.
-	for _, b := range sender.events {
+	for _, b := range sender.snapshotEvents() {
 		for _, e := range b {
 			if e.UserID != "01USER" {
 				t.Fatalf("event UserID=%q want 01USER", e.UserID)
