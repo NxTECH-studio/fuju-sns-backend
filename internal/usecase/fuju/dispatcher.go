@@ -6,15 +6,16 @@
 //     fuju's POST /v1/{tenant}/contents. SNS does NOT pre-extract
 //     hashtags / entities; fuju does that side itself (RFC-LT-003
 //     Option D).
-//   - Events — user actions (view_start/end, scroll_stop, rewind, like,
-//     follow, comment, ...) are buffered and posted in batches to fuju's
-//     POST /v1/{tenant}/events. Append-only, fire-and-forget from the
-//     SNS-side request path.
+//   - Events — server-side user actions (like, follow, comment) are
+//     buffered and posted in batches to fuju's POST /v1/{tenant}/events.
+//     Append-only, fire-and-forget from the SNS-side request path.
+//     Client-originated view_*/scroll_stop/rewind signals are NOT routed
+//     here — clients ingest them directly into fuju.
 //
 // The dispatcher absorbs both streams via internal channels and flushes
 // them through a background worker. Hot-path callers (post / like /
-// follow usecases, the frontend events endpoint) only enqueue; they
-// never block on the network call to fuju.
+// follow commit hooks) only enqueue; they never block on the network
+// call to fuju.
 //
 // Loss policy: in-memory queues are bounded (BatchSize × 8 by default).
 // When full, oldest entries are dropped with a warning log — this is

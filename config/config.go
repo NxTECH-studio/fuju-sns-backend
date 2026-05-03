@@ -82,9 +82,9 @@ type Config struct {
 	OGPUserAgent string
 
 	// Fuju emotion model integration. When FujuModelBaseURL is empty
-	// the dispatcher boots in disabled mode (hooks no-op, /v1/me/events
-	// returns 503). This lets local dev / CI run without a fuju
-	// instance reachable.
+	// the dispatcher boots in disabled mode and the server-side commit
+	// hooks (post / like / follow) become no-ops. This lets local dev
+	// / CI run without a fuju instance reachable.
 	FujuModelBaseURL       string
 	FujuModelTenantID      string
 	FujuModelScope         string

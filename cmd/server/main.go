@@ -232,12 +232,6 @@ func main() {
 	// Me: authenticated caller's own record (lazy-created / hydrated).
 	mux.Handle("GET /me", authed(http.HandlerFunc(userHandler.Me)))
 
-	// Frontend telemetry → fuju (only mounted when integration is on).
-	if fujuDispatcher != nil {
-		meEventsHandler := handler.NewMeEventsHandler(fujuDispatcher)
-		mux.Handle("POST /v1/me/events", authed(http.HandlerFunc(meEventsHandler.PostEvents)))
-	}
-
 	// Users
 	mux.HandleFunc("GET /users", userHandler.ListUsers)
 	mux.HandleFunc("GET /users/{sub}", userHandler.GetUser)
