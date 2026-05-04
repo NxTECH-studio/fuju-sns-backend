@@ -80,6 +80,18 @@ type Config struct {
 
 	// OGP fetcher
 	OGPUserAgent string
+
+	// Fuju emotion model integration. When FujuModelBaseURL is empty
+	// the dispatcher boots in disabled mode and the server-side commit
+	// hooks (post / like / follow) become no-ops. This lets local dev
+	// / CI run without a fuju instance reachable.
+	FujuModelBaseURL       string
+	FujuModelTenantID      string
+	FujuModelScope         string
+	FujuModelBatchSize     int
+	FujuModelFlushInterval time.Duration
+	FujuModelSendTimeout   time.Duration
+	FujuModelQueueCapacity int
 }
 
 // Load loads configuration from environment variables.
@@ -111,6 +123,13 @@ func Load() (*Config, error) {
 		LogLevel:                    getEnv("LOG_LEVEL", "info"),
 		CORSAllowedOrigins:          getEnv("CORS_ALLOWED_ORIGINS", "*"),
 		OGPUserAgent:                getEnv("OGP_USER_AGENT", "FujuBot/1.0 (+https://fuju.example.com/bot)"),
+		FujuModelBaseURL:            getEnv("FUJU_MODEL_BASE_URL", ""),
+		FujuModelTenantID:           getEnv("FUJU_MODEL_TENANT_ID", ""),
+		FujuModelScope:              getEnv("FUJU_MODEL_SCOPE", "ingest:events"),
+		FujuModelBatchSize:          getEnvInt("FUJU_MODEL_BATCH_SIZE", 50),
+		FujuModelFlushInterval:      getEnvDuration("FUJU_MODEL_FLUSH_INTERVAL", 5*time.Second),
+		FujuModelSendTimeout:        getEnvDuration("FUJU_MODEL_SEND_TIMEOUT", 5*time.Second),
+		FujuModelQueueCapacity:      getEnvInt("FUJU_MODEL_QUEUE_CAPACITY", 0),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -238,7 +257,18 @@ func (c *Config) Validate() error {
 	if c.SessionCookieFallbackMaxAge <= 0 {
 		return fmt.Errorf("SESSION_COOKIE_FALLBACK_MAX_AGE must be > 0 (got %s)", c.SessionCookieFallbackMaxAge)
 	}
+	// Fuju model integration: BaseURL + TenantID are paired (both empty
+	// = disabled, both set = enabled, anything else = misconfiguration).
+	if (c.FujuModelBaseURL == "") != (c.FujuModelTenantID == "") {
+		return fmt.Errorf("FUJU_MODEL_BASE_URL and FUJU_MODEL_TENANT_ID must be set together (got base=%q tenant=%q)", c.FujuModelBaseURL, c.FujuModelTenantID)
+	}
 	return nil
+}
+
+// FujuModelEnabled reports whether the fuju-emotion-model integration is
+// configured. Used at boot to gate the dispatcher / hooks / endpoint.
+func (c *Config) FujuModelEnabled() bool {
+	return c.FujuModelBaseURL != "" && c.FujuModelTenantID != ""
 }
 
 // SessionCookieSameSiteMode returns the http.SameSite value matching
