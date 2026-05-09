@@ -283,7 +283,7 @@ func (c *Config) Validate() error {
 	// deployment mistake, so fail boot instead of silently disabling
 	// uploads or starting with an unauthenticated S3 client.
 	if err := c.validateR2(); err != nil {
-		return err
+		return fmt.Errorf("R2 configuration: %w", err)
 	}
 	return nil
 }

@@ -7,6 +7,7 @@ import (
 	"github.com/fuju/backend/internal/domain"
 	"github.com/fuju/backend/internal/repository"
 	"github.com/fuju/backend/pkg/errors"
+	"github.com/fuju/backend/pkg/logger"
 	"github.com/oklog/ulid/v2"
 )
 
@@ -38,7 +39,7 @@ func (uc *UploadImageUseCase) Execute(ctx context.Context, req *domain.UploadIma
 	}
 
 	req.FileSize = int64(len(req.FileData))
-	if req.FileSize > 5*1024*1024 { // 5MB limit
+	if req.FileSize > domain.MaxImageBytes {
 		return nil, errors.InvalidRequest("file size exceeds 5MB limit", nil)
 	}
 
@@ -103,16 +104,21 @@ func (uc *GetUserImagesUseCase) Execute(ctx context.Context, userSub string) ([]
 type DeleteImageUseCase struct {
 	imageRepo      repository.ImageRepository
 	storageService domain.StorageService
+	log            *logger.Logger
 }
 
-// NewDeleteImageUseCase creates a new DeleteImageUseCase.
+// NewDeleteImageUseCase creates a new DeleteImageUseCase. log may be nil
+// in tests; in that case the storage-delete failure path is silent
+// instead of WARN-logged.
 func NewDeleteImageUseCase(
 	imageRepo repository.ImageRepository,
 	storageService domain.StorageService,
+	log *logger.Logger,
 ) *DeleteImageUseCase {
 	return &DeleteImageUseCase{
 		imageRepo:      imageRepo,
 		storageService: storageService,
+		log:            log,
 	}
 }
 
@@ -140,8 +146,16 @@ func (uc *DeleteImageUseCase) Execute(ctx context.Context, imageID, userSub stri
 		return errors.Forbidden("not authorized to delete this image")
 	}
 
-	// Best-effort remove from R2; continue on error so the DB row is still soft-deleted.
-	_ = uc.storageService.Delete(ctx, image.StorageKey)
+	// Best-effort remove from R2; continue on error so the DB row is still
+	// soft-deleted. WARN so an operator can find orphaned objects later
+	// — silencing this leaves R2 storage growing without a trail.
+	if err := uc.storageService.Delete(ctx, image.StorageKey); err != nil {
+		uc.warn(ctx, "image storage delete failed; DB will still be soft-deleted",
+			"image_id", imageID,
+			"storage_key", image.StorageKey,
+			"err", err,
+		)
+	}
 
 	if err := uc.imageRepo.Delete(ctx, imageID); err != nil {
 		return errors.New(
@@ -153,4 +167,11 @@ func (uc *DeleteImageUseCase) Execute(ctx context.Context, imageID, userSub stri
 	}
 
 	return nil
+}
+
+func (uc *DeleteImageUseCase) warn(ctx context.Context, msg string, kv ...any) {
+	if uc.log == nil {
+		return
+	}
+	uc.log.Warn(ctx, msg, kv...)
 }

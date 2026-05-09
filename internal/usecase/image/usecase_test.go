@@ -168,7 +168,7 @@ func TestUploadImage_OverSizeLimit(t *testing.T) {
 	// short slice.
 	req := &domain.UploadImageRequest{
 		FileName: "big.jpg",
-		FileData: make([]byte, 5*1024*1024+1),
+		FileData: make([]byte, domain.MaxImageBytes+1),
 		MimeType: "image/jpeg",
 		UserID:   testUserSub,
 	}
@@ -278,7 +278,7 @@ func TestDeleteImage_Success(t *testing.T) {
 
 	created := seedImage(t, repo, storage, testUserSub)
 
-	uc := NewDeleteImageUseCase(repo, storage)
+	uc := NewDeleteImageUseCase(repo, storage, nil)
 	if err := uc.Execute(context.Background(), created.ID, testUserSub); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -296,7 +296,7 @@ func TestDeleteImage_Forbidden(t *testing.T) {
 	storage := newFakeStorage()
 	created := seedImage(t, repo, storage, testUserSub)
 
-	uc := NewDeleteImageUseCase(repo, storage)
+	uc := NewDeleteImageUseCase(repo, storage, nil)
 	err := uc.Execute(context.Background(), created.ID, otherUserSub)
 	assertAppErrorCode(t, err, apperrors.ErrForbidden)
 
@@ -307,13 +307,13 @@ func TestDeleteImage_Forbidden(t *testing.T) {
 
 func TestDeleteImage_NotFound(t *testing.T) {
 	repo := inmemory.NewImageRepository(newLinkStore())
-	uc := NewDeleteImageUseCase(repo, newFakeStorage())
+	uc := NewDeleteImageUseCase(repo, newFakeStorage(), nil)
 	err := uc.Execute(context.Background(), "01TESTNOTFOUND0000000000A0", testUserSub)
 	assertAppErrorCode(t, err, apperrors.ErrNotFound)
 }
 
 func TestDeleteImage_RejectsEmptyID(t *testing.T) {
-	uc := NewDeleteImageUseCase(inmemory.NewImageRepository(newLinkStore()), newFakeStorage())
+	uc := NewDeleteImageUseCase(inmemory.NewImageRepository(newLinkStore()), newFakeStorage(), nil)
 	err := uc.Execute(context.Background(), "", testUserSub)
 	assertAppErrorCode(t, err, apperrors.ErrInvalidRequest)
 }
@@ -326,7 +326,7 @@ func TestDeleteImage_StorageFailureStillSoftDeletes(t *testing.T) {
 	created := seedImage(t, repo, storage, testUserSub)
 	storage.deleteErr = errors.New("r2 unreachable")
 
-	uc := NewDeleteImageUseCase(repo, storage)
+	uc := NewDeleteImageUseCase(repo, storage, nil)
 	if err := uc.Execute(context.Background(), created.ID, testUserSub); err != nil {
 		t.Fatalf("Execute should swallow storage delete errors, got %v", err)
 	}

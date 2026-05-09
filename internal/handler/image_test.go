@@ -78,7 +78,7 @@ func newImageFixture(t *testing.T) *imageFixture {
 
 	uploadUC := imageusecase.NewUploadImageUseCase(repo, storage)
 	getUC := imageusecase.NewGetUserImagesUseCase(repo)
-	deleteUC := imageusecase.NewDeleteImageUseCase(repo, storage)
+	deleteUC := imageusecase.NewDeleteImageUseCase(repo, storage, nil)
 
 	return &imageFixture{
 		handler: NewImageHandler(uploadUC, getUC, deleteUC),
@@ -200,7 +200,7 @@ func TestUploadImage_OverSizeLimit(t *testing.T) {
 	// 5 MiB + 1 byte tips the in-handler cap. The MaxBytesReader on the
 	// whole body has 1 MiB headroom, so this also exercises the per-file
 	// `len(fileData) > maxImageBytes` branch (not the body cap).
-	body := make([]byte, 5*1024*1024+1)
+	body := make([]byte, domain.MaxImageBytes+1)
 	// Make the bytes look like JPEG so sniff doesn't independently 400
 	// before the size check fires.
 	copy(body, fakeJPEG())
@@ -374,4 +374,3 @@ func uploadOne(t *testing.T, fx *imageFixture, ownerSub string) publicImageView 
 	}
 	return resp.Data
 }
-

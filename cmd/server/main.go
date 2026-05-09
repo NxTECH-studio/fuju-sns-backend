@@ -187,7 +187,7 @@ func main() {
 		}
 		uploadImageUC := imageusecase.NewUploadImageUseCase(imageRepo, r2Service)
 		getUserImagesUC := imageusecase.NewGetUserImagesUseCase(imageRepo)
-		deleteImageUC := imageusecase.NewDeleteImageUseCase(imageRepo, r2Service)
+		deleteImageUC := imageusecase.NewDeleteImageUseCase(imageRepo, r2Service, log)
 		imageHandler = handler.NewImageHandler(uploadImageUC, getUserImagesUC, deleteImageUC)
 	} else {
 		log.Info(ctx, "Image upload disabled: R2 is not configured")
