@@ -47,6 +47,7 @@
 | 06 | [06-frontend-handoff-docs-and-dead-code-removal.md](./06-frontend-handoff-docs-and-dead-code-removal.md) | 01-05 | 確定済み。dead code 削除 → swagger 刷新 → FE 向けプロダクト概要 / AuthCore 連携ドキュメント整備。migration 追加なし |
 | 07 | [07-fix-ci-go-version-and-lint-hygiene.md](./07-fix-ci-go-version-and-lint-hygiene.md) | 04-06（CI を直す緊急タスクとして独立にも進む） | 確定済み。`.github/workflows/ci.yml` の `GO_VERSION` を `1.25` に bump + `cmd/server/main.go` exported var doc comment 追加。**現在 CI red のブロッカー、最優先** |
 | 08 | [08-wire-postgres-repository.md](./08-wire-postgres-repository.md) | 01-07 | `[未確定]` あり（ORM / default backend / inmemory 残置）。`pkg/db` 新設 + `internal/repository/postgres/` に全 interface 実装 + CI に integration test 追加。4 Phase ≒ 4 PR に分割 |
+| 12 | [12-image-upload-hardening-and-fe-handoff.md](./12-image-upload-hardening-and-fe-handoff.md) | 01, 02-post, 06, 08 | 確定済み。R2 設定の `config.Config` 統合、image usecase / handler / sanitizeFilename テスト追加、FE 向け `docs/frontend/image-upload.md` 整備。新規スキーマ・API 変更なし |
 
 > `04-implement-organization.md` は **廃案・削除済み**（MVP 非対応）。他ドキュメントからも参照を削除済み。
 
