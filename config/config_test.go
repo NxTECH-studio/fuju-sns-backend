@@ -318,3 +318,87 @@ func TestGetEnvBool_invalidReturnsDefault(t *testing.T) {
 		t.Errorf("unknown value should fall back to default")
 	}
 }
+
+// withR2 fully populates the five R2 fields on the base() config.
+func withR2(c *Config) *Config {
+	c.R2Endpoint = "https://example.r2.cloudflarestorage.com"
+	c.R2BucketName = "fuju-images"
+	c.R2PublicDomain = "https://images.fuju.example.com"
+	c.R2AccessKeyID = "ak"
+	c.R2SecretAccessKey = "sk"
+	return c
+}
+
+func TestR2Enabled_allFiveSet(t *testing.T) {
+	c := withR2(base())
+	if !c.R2Enabled() {
+		t.Errorf("expected R2Enabled=true with all five fields set")
+	}
+}
+
+func TestR2Enabled_allEmpty(t *testing.T) {
+	c := base()
+	if c.R2Enabled() {
+		t.Errorf("expected R2Enabled=false with no R2 fields set")
+	}
+}
+
+func TestR2Enabled_partialIsFalse(t *testing.T) {
+	// Each pop-out of one field individually should report disabled.
+	// (The same partial state is rejected by Validate, so callers will
+	// not actually reach R2Enabled() in that shape — but the predicate
+	// itself must remain conservative.)
+	mutators := []func(*Config){
+		func(c *Config) { c.R2Endpoint = "" },
+		func(c *Config) { c.R2BucketName = "" },
+		func(c *Config) { c.R2PublicDomain = "" },
+		func(c *Config) { c.R2AccessKeyID = "" },
+		func(c *Config) { c.R2SecretAccessKey = "" },
+	}
+	for i, m := range mutators {
+		c := withR2(base())
+		m(c)
+		if c.R2Enabled() {
+			t.Errorf("case %d: expected R2Enabled=false when one field is empty", i)
+		}
+	}
+}
+
+func TestValidate_acceptsAllFiveR2Fields(t *testing.T) {
+	c := withR2(base())
+	if err := c.Validate(); err != nil {
+		t.Fatalf("fully-populated R2 config should pass Validate, got %v", err)
+	}
+}
+
+func TestValidate_acceptsZeroR2Fields(t *testing.T) {
+	// All five empty is the legitimate "image upload disabled" state.
+	c := base()
+	if err := c.Validate(); err != nil {
+		t.Fatalf("empty R2 config should pass Validate, got %v", err)
+	}
+}
+
+func TestValidate_rejectsPartialR2Config(t *testing.T) {
+	// Drop each field one at a time from a fully-populated config; each
+	// case must fail validation rather than silently disable uploads.
+	mutators := []struct {
+		name string
+		mut  func(*Config)
+	}{
+		{"missing endpoint", func(c *Config) { c.R2Endpoint = "" }},
+		{"missing bucket", func(c *Config) { c.R2BucketName = "" }},
+		{"missing public domain", func(c *Config) { c.R2PublicDomain = "" }},
+		{"missing access key id", func(c *Config) { c.R2AccessKeyID = "" }},
+		{"missing secret access key", func(c *Config) { c.R2SecretAccessKey = "" }},
+	}
+	for _, tc := range mutators {
+		t.Run(tc.name, func(t *testing.T) {
+			c := withR2(base())
+			tc.mut(c)
+			if err := c.Validate(); err == nil {
+				t.Errorf("expected partial R2 config to be rejected (%s)", tc.name)
+			}
+		})
+	}
+}

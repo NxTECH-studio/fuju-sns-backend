@@ -5,13 +5,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	appconfig "github.com/fuju/backend/config"
 	"github.com/fuju/backend/internal/domain"
 	"github.com/fuju/backend/pkg/errors"
 	"github.com/oklog/ulid/v2"
@@ -24,18 +24,23 @@ type R2Service struct {
 	publicDomain string
 }
 
-// NewR2Service creates a new R2Service instance
-func NewR2Service() (*R2Service, error) {
-	// Get configuration from environment
-	endpoint := os.Getenv("R2_ENDPOINT")
-	bucketName := os.Getenv("R2_BUCKET_NAME")
-	publicDomain := os.Getenv("R2_PUBLIC_DOMAIN")
-	accessKeyID := os.Getenv("R2_ACCESS_KEY_ID")
-	secretAccessKey := os.Getenv("R2_SECRET_ACCESS_KEY")
-
-	if endpoint == "" || bucketName == "" || publicDomain == "" {
+// NewR2Service creates a new R2Service instance from the application
+// configuration. Caller must have verified cfg.R2Enabled() before
+// invoking — passing a partially-populated config returns an error so
+// the misconfiguration is visible at boot.
+func NewR2Service(cfg *appconfig.Config) (*R2Service, error) {
+	if cfg == nil {
+		return nil, errors.InvalidRequest("config is required", nil)
+	}
+	if !cfg.R2Enabled() {
 		return nil, errors.InvalidRequest("R2 configuration incomplete", nil)
 	}
+
+	endpoint := cfg.R2Endpoint
+	bucketName := cfg.R2BucketName
+	publicDomain := cfg.R2PublicDomain
+	accessKeyID := cfg.R2AccessKeyID
+	secretAccessKey := cfg.R2SecretAccessKey
 
 	// Create custom endpoint resolver for R2
 	//nolint:staticcheck
@@ -55,15 +60,15 @@ func NewR2Service() (*R2Service, error) {
 
 	// Load AWS configuration with custom credentials and endpoint
 	//nolint:staticcheck
-	cfg, err := config.LoadDefaultConfig(context.Background(),
+	awsCfg, err := awsconfig.LoadDefaultConfig(context.Background(),
 		//nolint:staticcheck
-		config.WithEndpointResolverWithOptions(customResolver),
-		config.WithCredentialsProvider(
+		awsconfig.WithEndpointResolverWithOptions(customResolver),
+		awsconfig.WithCredentialsProvider(
 			aws.NewCredentialsCache(
 				NewStaticCredentialsProvider(accessKeyID, secretAccessKey),
 			),
 		),
-		config.WithRegion("auto"),
+		awsconfig.WithRegion("auto"),
 	)
 	if err != nil {
 		return nil, errors.New(
@@ -75,7 +80,7 @@ func NewR2Service() (*R2Service, error) {
 	}
 
 	// Create S3 client
-	client := s3.NewFromConfig(cfg)
+	client := s3.NewFromConfig(awsCfg)
 
 	return &R2Service{
 		client:       client,

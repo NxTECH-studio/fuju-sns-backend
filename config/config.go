@@ -92,6 +92,17 @@ type Config struct {
 	FujuModelFlushInterval time.Duration
 	FujuModelSendTimeout   time.Duration
 	FujuModelQueueCapacity int
+
+	// Cloudflare R2 (S3-compatible) image storage. All five fields must
+	// be set together; any partial configuration is rejected by Validate
+	// to surface misconfiguration at boot rather than at first upload.
+	// When all are empty the image upload routes are not registered —
+	// see R2Enabled().
+	R2Endpoint        string
+	R2BucketName      string
+	R2PublicDomain    string
+	R2AccessKeyID     string
+	R2SecretAccessKey string
 }
 
 // Load loads configuration from environment variables.
@@ -130,6 +141,11 @@ func Load() (*Config, error) {
 		FujuModelFlushInterval:      getEnvDuration("FUJU_MODEL_FLUSH_INTERVAL", 5*time.Second),
 		FujuModelSendTimeout:        getEnvDuration("FUJU_MODEL_SEND_TIMEOUT", 5*time.Second),
 		FujuModelQueueCapacity:      getEnvInt("FUJU_MODEL_QUEUE_CAPACITY", 0),
+		R2Endpoint:                  getEnv("R2_ENDPOINT", ""),
+		R2BucketName:                getEnv("R2_BUCKET_NAME", ""),
+		R2PublicDomain:              getEnv("R2_PUBLIC_DOMAIN", ""),
+		R2AccessKeyID:               getEnv("R2_ACCESS_KEY_ID", ""),
+		R2SecretAccessKey:           getEnv("R2_SECRET_ACCESS_KEY", ""),
 	}
 
 	if err := cfg.Validate(); err != nil {
@@ -262,13 +278,60 @@ func (c *Config) Validate() error {
 	if (c.FujuModelBaseURL == "") != (c.FujuModelTenantID == "") {
 		return fmt.Errorf("FUJU_MODEL_BASE_URL and FUJU_MODEL_TENANT_ID must be set together (got base=%q tenant=%q)", c.FujuModelBaseURL, c.FujuModelTenantID)
 	}
+	// R2 image storage: all five fields are paired (all empty = disabled,
+	// all set = enabled). A partial configuration is almost certainly a
+	// deployment mistake, so fail boot instead of silently disabling
+	// uploads or starting with an unauthenticated S3 client.
+	if err := c.validateR2(); err != nil {
+		return err
+	}
 	return nil
+}
+
+// validateR2 enforces the all-or-nothing rule on the R2 fields. Returns
+// nil for the two valid states (all empty, all set) and an error that
+// names the partially-set fields otherwise.
+func (c *Config) validateR2() error {
+	fields := []struct {
+		name  string
+		value string
+	}{
+		{"R2_ENDPOINT", c.R2Endpoint},
+		{"R2_BUCKET_NAME", c.R2BucketName},
+		{"R2_PUBLIC_DOMAIN", c.R2PublicDomain},
+		{"R2_ACCESS_KEY_ID", c.R2AccessKeyID},
+		{"R2_SECRET_ACCESS_KEY", c.R2SecretAccessKey},
+	}
+	var setNames, unsetNames []string
+	for _, f := range fields {
+		if f.value == "" {
+			unsetNames = append(unsetNames, f.name)
+		} else {
+			setNames = append(setNames, f.name)
+		}
+	}
+	if len(setNames) == 0 || len(unsetNames) == 0 {
+		return nil
+	}
+	return fmt.Errorf("R2 configuration is partial: set=%v, unset=%v (all five must be set together or all empty)", setNames, unsetNames)
 }
 
 // FujuModelEnabled reports whether the fuju-emotion-model integration is
 // configured. Used at boot to gate the dispatcher / hooks / endpoint.
 func (c *Config) FujuModelEnabled() bool {
 	return c.FujuModelBaseURL != "" && c.FujuModelTenantID != ""
+}
+
+// R2Enabled reports whether all five R2 fields are populated. Validate
+// guarantees the all-or-nothing rule, so checking any one would suffice
+// in practice — the explicit AND is documentation. Used at boot to gate
+// the image upload routes.
+func (c *Config) R2Enabled() bool {
+	return c.R2Endpoint != "" &&
+		c.R2BucketName != "" &&
+		c.R2PublicDomain != "" &&
+		c.R2AccessKeyID != "" &&
+		c.R2SecretAccessKey != ""
 }
 
 // SessionCookieSameSiteMode returns the http.SameSite value matching
