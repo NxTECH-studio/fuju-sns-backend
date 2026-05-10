@@ -53,15 +53,10 @@ func toPublicImageViews(images []*domain.Image) []publicImageView {
 	return out
 }
 
-// Image upload limits.
-const (
-	// maxImageBytes is the hard per-file cap enforced before the usecase
-	// even sees the data.
-	maxImageBytes = 5 * 1024 * 1024
-	// maxImageRequestBytes caps the whole multipart body, leaving a small
-	// headroom for the envelope + headers.
-	maxImageRequestBytes = maxImageBytes + 1024*1024
-)
+// maxImageRequestBytes caps the whole multipart body, leaving a small
+// headroom for the envelope + headers above the per-file cap from
+// domain.MaxImageBytes.
+const maxImageRequestBytes = domain.MaxImageBytes + 1024*1024
 
 // ImageHandler contains handlers for image endpoints.
 type ImageHandler struct {
@@ -114,22 +109,25 @@ func (h *ImageHandler) UploadImage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if len(fileData) > maxImageBytes {
+	if len(fileData) > domain.MaxImageBytes {
 		WriteErrorResponse(w, errors.InvalidRequest("file size exceeds 5MB limit", nil))
 		return
 	}
 
+	// Two-stage MIME validation. Stage 1 trusts the advertised
+	// Content-Type only enough to reject obvious non-image uploads early
+	// (no body sniff yet). Stage 2 always sniffs the actual bytes so a
+	// client cannot label HTML/JS as image/jpeg. Distinct error messages
+	// surface which stage rejected the request in logs.
 	mimeType := fileHeader.Header.Get("Content-Type")
 	if mimeType == "" {
 		mimeType = http.DetectContentType(fileData)
 	}
 	if !strings.HasPrefix(mimeType, "image/") {
-		WriteErrorResponse(w, errors.InvalidRequest("only image files are allowed", nil))
+		WriteErrorResponse(w, errors.InvalidRequest("advertised content type is not an image", nil))
 		return
 	}
 
-	// Cross-check advertised type against sniffed type so a client cannot
-	// label HTML/JS as image/jpeg.
 	sniffed := http.DetectContentType(fileData)
 	if !strings.HasPrefix(sniffed, "image/") {
 		WriteErrorResponse(w, errors.InvalidRequest("file content is not a recognised image", nil))

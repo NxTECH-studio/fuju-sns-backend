@@ -14,6 +14,9 @@ order:
    generation-ready)
 4. [`docs/authcore-integration.md`](docs/authcore-integration.md) —
    AuthCore Bearer token flow, `/me` hydrate, admin flag, CORS
+5. [`docs/frontend/image-upload.md`](docs/frontend/image-upload.md) —
+   `multipart/form-data` upload to `POST /v1/images`, attaching images
+   to posts via `image_ids`
 
 Backend maintainers: see [`docs/architecture.md`](docs/architecture.md)
 and [`docs/IMPLEMENTATION_GUIDE.md`](docs/IMPLEMENTATION_GUIDE.md).
@@ -88,6 +91,28 @@ Optional:
 - `AUTHCORE_INTROSPECT_CACHE_TTL`: In-memory introspection cache TTL (default: `30s`)
 - `CORS_ALLOWED_ORIGINS`: Comma-separated origins (default: `*`)
 - `OGP_USER_AGENT`: User-Agent sent by the OGP fetcher
+
+### Optional features
+
+#### Image upload (Cloudflare R2)
+
+The `POST /v1/images`, `GET /v1/images`, `DELETE /v1/images/{id}`
+endpoints are mounted only when **all five** of the following are set.
+Leaving them all empty disables image upload (the routes return 404 and
+the server logs `Image upload disabled: R2 is not configured` at boot).
+A partial configuration is rejected by `config.Validate` to surface
+deployment mistakes early.
+
+- `R2_ENDPOINT` — `https://<account_id>.r2.cloudflarestorage.com` (S3-compatible API endpoint, from the Cloudflare R2 dashboard)
+- `R2_BUCKET_NAME` — bucket name (must already exist in R2)
+- `R2_PUBLIC_DOMAIN` — public-access URL prefix, e.g. `https://images.fuju.example.com` (R2 Public Bucket or custom domain)
+- `R2_ACCESS_KEY_ID` — R2 API token's access key ID
+- `R2_SECRET_ACCESS_KEY` — R2 API token's secret access key
+
+Frontend integrators should follow
+[`docs/frontend/image-upload.md`](docs/frontend/image-upload.md) for
+the API contract; the swagger spec is also available at
+`docs/swagger.yaml` under `/v1/images`.
 
 ## Project Structure
 

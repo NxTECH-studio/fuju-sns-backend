@@ -174,18 +174,23 @@ func main() {
 	followHandler := handler.NewFollowHandler(followUC, unfollowUC, listFollowersUC, listFollowingUC)
 	timelineHandler := handler.NewTimelineHandler(homeTimelineUC, userTimelineUC, globalTimelineUC)
 
-	// Optional R2 / image handlers.
-	r2Service, err := storage.NewR2Service()
-	if err != nil {
-		log.Warn(ctx, "Failed to initialize R2 service", err)
-		r2Service = nil
-	}
+	// Optional R2 / image handlers. Disabled R2 is the legitimate state
+	// for local dev and CI, so log at info level rather than warn —
+	// nothing is broken, the routes simply are not mounted.
 	var imageHandler *handler.ImageHandler
-	if r2Service != nil {
+	if cfg.R2Enabled() {
+		r2Service, err := storage.NewR2Service(cfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to initialize R2 service: %v\n", err)
+			cancelBackground()
+			os.Exit(1) //nolint:gocritic // cancelBackground() invoked above; no other deferred cleanup is live at this point.
+		}
 		uploadImageUC := imageusecase.NewUploadImageUseCase(imageRepo, r2Service)
 		getUserImagesUC := imageusecase.NewGetUserImagesUseCase(imageRepo)
-		deleteImageUC := imageusecase.NewDeleteImageUseCase(imageRepo, r2Service)
+		deleteImageUC := imageusecase.NewDeleteImageUseCase(imageRepo, r2Service, log)
 		imageHandler = handler.NewImageHandler(uploadImageUC, getUserImagesUC, deleteImageUC)
+	} else {
+		log.Info(ctx, "Image upload disabled: R2 is not configured")
 	}
 
 	// Session cookie policy for the Bearer→Cookie handoff endpoints.
