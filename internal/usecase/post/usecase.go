@@ -270,15 +270,28 @@ func (uc *ListRepliesUseCase) Execute(ctx context.Context, postID string, cursor
 	return details, nextCursor, nil
 }
 
+// LikeHook is a best-effort callback fired after a Like is newly
+// inserted (state 0→1). Idempotent re-likes do NOT fire the hook.
+// Current consumer: fuju.Dispatcher (forwards a `like` event).
+type LikeHook func(ctx context.Context, userSub, postID string)
+
 // LikePostUseCase marks a post as liked by the caller (idempotent).
 type LikePostUseCase struct {
 	postRepo repository.PostRepository
 	likeRepo repository.LikeRepository
+	onCommit LikeHook
 }
 
 // NewLikePostUseCase constructs a LikePostUseCase.
 func NewLikePostUseCase(postRepo repository.PostRepository, likeRepo repository.LikeRepository) *LikePostUseCase {
 	return &LikePostUseCase{postRepo: postRepo, likeRepo: likeRepo}
+}
+
+// WithCommitHook installs a best-effort post-commit callback. Returns
+// the receiver so it chains onto NewLikePostUseCase.
+func (uc *LikePostUseCase) WithCommitHook(hook LikeHook) *LikePostUseCase {
+	uc.onCommit = hook
+	return uc
 }
 
 // Execute likes the post. Repeated calls are no-ops (the denormalized
@@ -304,6 +317,9 @@ func (uc *LikePostUseCase) Execute(ctx context.Context, userSub, postID string) 
 	if inserted {
 		if err := uc.postRepo.IncrementLikesCount(ctx, postID); err != nil {
 			return errors.DatabaseError("failed to increment likes_count", err)
+		}
+		if uc.onCommit != nil {
+			uc.onCommit(ctx, userSub, postID)
 		}
 	}
 	return nil

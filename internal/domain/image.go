@@ -6,6 +6,11 @@ import (
 	"time"
 )
 
+// MaxImageBytes is the per-file upload cap shared by the handler hard
+// cap and the usecase post-validation. Single source of truth so the
+// two layers can never disagree.
+const MaxImageBytes = 5 * 1024 * 1024
+
 // Image is a stored image record. ID and UserID are ULIDs generated in the
 // application layer.
 type Image struct {

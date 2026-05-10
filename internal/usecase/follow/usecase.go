@@ -24,16 +24,29 @@ type Result struct {
 	FollowersCount int64
 }
 
+// CommitHook is a best-effort callback fired after a Follow is newly
+// inserted (state 0→1). Idempotent re-follows do NOT fire the hook.
+// Current consumer: fuju.Dispatcher (forwards a `follow` event).
+type CommitHook func(ctx context.Context, followerSub, followeeSub string)
+
 // UseCase creates a directed follow relation from followerSub to
 // followeeSub. Idempotent.
 type UseCase struct {
 	userRepo   repository.UserRepository
 	followRepo repository.FollowRepository
+	onCommit   CommitHook
 }
 
 // NewUseCase constructs a follow UseCase.
 func NewUseCase(userRepo repository.UserRepository, followRepo repository.FollowRepository) *UseCase {
 	return &UseCase{userRepo: userRepo, followRepo: followRepo}
+}
+
+// WithCommitHook installs a best-effort post-commit callback. Returns
+// the receiver so it chains onto NewUseCase.
+func (uc *UseCase) WithCommitHook(hook CommitHook) *UseCase {
+	uc.onCommit = hook
+	return uc
 }
 
 // Execute performs the follow. Repeat calls return the existing state
@@ -70,6 +83,9 @@ func (uc *UseCase) Execute(ctx context.Context, followerSub, followeeSub string)
 			return nil, errors.DatabaseError("failed to bump followers_count", err)
 		}
 		followersCount++
+		if uc.onCommit != nil {
+			uc.onCommit(ctx, followerSub, followeeSub)
+		}
 	}
 	return &Result{Following: true, FollowersCount: followersCount}, nil
 }
